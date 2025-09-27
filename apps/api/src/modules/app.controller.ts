@@ -1,7 +1,8 @@
 import { Body, Controller, Inject, Post } from '@nestjs/common';
-import { ZodValidationPipe } from 'nestjs-zod';
 import type { AgentRunResult, ChatAgent, ChatCompletionInput } from '@packages/agents';
 import { ChatCompletionSchema } from '@packages/agents';
+import { ZodValidationPipe } from 'nestjs-zod';
+
 import { CHAT_AGENT_TOKEN } from './app.module';
 
 type OpenAIChoice = {
