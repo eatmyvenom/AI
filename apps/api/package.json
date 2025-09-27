@@ -1,0 +1,26 @@
+{
+  "name": "@apps/api",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/main.js",
+  "types": "dist/main.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json -w",
+    "lint": "eslint src --ext .ts",
+    "test": "echo \"No tests yet\"",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.6",
+    "@nestjs/core": "^11.1.6",
+    "@nestjs/platform-express": "^11.1.6",
+    "nestjs-zod": "^5.0.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "ai": "^5.0.56",
+    "@packages/agents": "workspace:*",
+    "@packages/logger": "workspace:*",
+    "@packages/tools": "workspace:*"
+  }
+}

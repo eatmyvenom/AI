@@ -1,0 +1,21 @@
+{
+  "name": "@packages/agents",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json -w",
+    "lint": "eslint src --ext .ts",
+    "test": "echo \"No tests yet\"",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^2.0.38",
+    "@ai-sdk/openai-compatible": "^1.0.19",
+    "ai": "^5.0.56",
+    "zod": "^4.1.11",
+    "@packages/tools": "workspace:*"
+  }
+}
