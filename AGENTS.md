@@ -10,10 +10,14 @@ This repository hosts a Turbo + pnpm monorepo for building AI agents on top of N
 
 ## API Application
 
-- **`apps/api`** exposes an OpenAI chat-completions compatible endpoint at `POST /v1/chat/completions`.
-  - Controller: `apps/api/src/modules/app.controller.ts` — Validates requests with `nestjs-zod`, invokes the chat agent, and returns OpenAI-shaped responses (including `_debug.steps`).
-  - Module wiring: `apps/api/src/modules/app.module.ts` — Registers the chat agent factory (`CHAT_AGENT_TOKEN`).
-  - Bootstrap: `apps/api/src/main.ts` — Starts Nest, attaches shared logger, listens on `PORT` (default 3000).
+- **`apps/api`** provides OpenAI-compatible routes:
+  - `POST /v1/chat/completions` — Accepts `{ model?, messages, temperature?, stream? }`.
+    - Non-streaming: returns `chat.completion` with `choices[0].message` and optional `usage`.
+    - Streaming: `stream=true` returns SSE with `chat.completion.chunk` events and final `[DONE]`.
+  - `GET /v1/models` and `GET /v1/models/:id` — Minimal model objects `{ id, object:"model", created, owned_by }`.
+  - Controller: `apps/api/src/modules/app.controller.ts` — Validates with `nestjs-zod`, invokes the chat agent, shapes OpenAI responses, and handles SSE.
+  - Module wiring: `apps/api/src/modules/app.module.ts` — Registers the chat agent factory (`CHAT_AGENT_TOKEN`) and a global auth guard enforcing `Authorization: Bearer ...`.
+  - Bootstrap: `apps/api/src/main.ts` — Starts Nest, attaches shared logger, installs a global OpenAI-style error filter, listens on `PORT` (default 3000).
 
 ## Environment Variables
 
@@ -33,10 +37,11 @@ Set these in the project root `.env`:
   model?: string;
   messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string }>;
   temperature?: number;
+  stream?: boolean; // used by API layer for SSE
 }
 ```
 
-It returns objects with `id`, `created`, `model`, `text`, `finishReason`, optional `usage`, and `steps` mirroring `streamText` output.
+It returns objects with `id`, `created`, `model`, `text`, `finishReason`, optional `usage`, and `steps` mirroring `streamText` output. The agent also exposes a `.stream(input)` method that returns the raw `streamText` result for SSE.
 
 ## Extending Agents
 
