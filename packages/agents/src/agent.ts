@@ -16,7 +16,8 @@ const MessageSchema = z.object({
 export const ChatCompletionSchema = z.object({
   model: z.string().optional(),
   messages: z.array(MessageSchema).min(1, 'At least one message must be supplied'),
-  temperature: z.number().min(0).max(2).optional()
+  temperature: z.number().min(0).max(2).optional(),
+  stream: z.boolean().optional()
 });
 
 export type ChatCompletionInput = z.input<typeof ChatCompletionSchema>;
@@ -46,6 +47,7 @@ export interface AgentConfig {
 
 export interface ChatAgent {
   run(input: ChatCompletionInput): Promise<AgentRunResult>;
+  stream(input: ChatCompletionInput): ReturnType<typeof streamText>;
 }
 
 export function createChatAgent(config: AgentConfig = {}): ChatAgent {
@@ -82,6 +84,18 @@ export function createChatAgent(config: AgentConfig = {}): ChatAgent {
         usage: coerceUsage(totalUsage ?? usage),
         steps
       };
+    },
+
+    stream(rawInput) {
+      const parsed = ChatCompletionSchema.parse(rawInput);
+      const modelId = resolveModel(parsed.model ?? defaultModel);
+
+      return streamText({
+        model: provider.chatModel(modelId),
+        messages: parsed.messages as Array<ModelMessage>,
+        temperature: parsed.temperature,
+        tools: Object.keys(tools ?? {}).length > 0 ? tools : undefined
+      });
     }
   };
 }
