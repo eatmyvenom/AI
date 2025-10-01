@@ -5,10 +5,9 @@ import { getActiveTools } from '@packages/tools';
 
 import { AuthGuard } from '../guards/auth.guard';
 
+import { CHAT_AGENT_TOKEN } from './chat/chat.constants';
 import { CompletionsController } from './chat/completions/completions.controller';
 import { ModelController } from './models/model.controller';
-
-export const CHAT_AGENT_TOKEN = 'CHAT_AGENT';
 
 @Module({
   controllers: [CompletionsController, ModelController],

@@ -1,5 +1,9 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
+import { ensureEnv } from './env';
+
+ensureEnv();
+
 export interface ProviderConfig {
   baseURL?: string;
   apiKey?: string;

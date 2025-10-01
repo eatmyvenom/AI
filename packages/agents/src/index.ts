@@ -7,3 +7,4 @@ export type {
 } from './agent';
 export { ChatCompletionSchema, createChatAgent } from './agent';
 export { createProvider, resolveModel, type ProviderConfig } from './provider';
+export { ensureEnv } from './env';

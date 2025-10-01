@@ -6,7 +6,7 @@ import { ChatCompletionSchema } from '@packages/agents';
 import type { FinishReason } from 'ai';
 import { ZodValidationPipe } from 'nestjs-zod';
 
-import { CHAT_AGENT_TOKEN } from '../../app.module';
+import { CHAT_AGENT_TOKEN } from '../chat.constants';
 
 type OpenAIChoice = {
   index: number;
