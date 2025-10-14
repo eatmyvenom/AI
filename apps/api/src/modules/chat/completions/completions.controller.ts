@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
 import { Body, Controller, Inject, InternalServerErrorException, Post, Res } from '@nestjs/common';
-import type { AgentRunResult, ChatAgent, ChatCompletionInput } from '@packages/agents';
-import { ChatCompletionSchema } from '@packages/agents';
+import type { AgentRunResult, ChatAgent, ChatCompletionInput, ReasoningDetail } from '@packages/agents';
+import { ChatCompletionSchema, resolveLanguageModel, resolveModel } from '@packages/agents';
 import type { FinishReason } from 'ai';
 import { ZodValidationPipe } from 'nestjs-zod';
 
@@ -13,6 +13,7 @@ type OpenAIChoice = {
   message: {
     role: 'assistant';
     content: string;
+    reasoning_details?: ReasoningDetail[];
   };
   finish_reason: string | null;
 };
@@ -69,7 +70,11 @@ function mapAgentResultToOpenAIResponse(result: AgentRunResult): OpenAIChatCompl
         index: 0,
         message: {
           role: 'assistant',
-          content: result.text
+          content: result.text,
+          // Include raw reasoning details if available
+          ...(result.reasoningDetails && result.reasoningDetails.length > 0
+            ? { reasoning_details: result.reasoningDetails }
+            : {})
         },
         finish_reason: finishReason
       }
@@ -123,7 +128,20 @@ function isSseResponseLike(value: unknown): value is SseResponseLike {
 }
 
 function handleStreamingResponse(res: SseResponseLike, agent: ChatAgent, payload: ChatCompletionInput): void {
-  const model = payload.model ?? process.env.MODEL ?? 'gpt-4.1-mini';
+  // Display the actual model id chosen by the current agent selection
+  const model = (() => {
+    const requested = (payload as any).agent as 'plan-act' | 'chat' | undefined;
+    if (requested === 'chat') {
+      return payload.model ?? process.env.MODEL ?? 'gpt-4.1-mini';
+    }
+    // plan-act default
+    try {
+      return resolveLanguageModel(payload.model).id;
+    } catch {
+      // fallback to any provided id to avoid blocking SSE headers
+      return payload.model ?? process.env.MODEL ?? 'gpt-4.1-mini';
+    }
+  })();
   const context: StreamingContext = {
     id: `chatcmpl_${randomUUID()}`,
     model,

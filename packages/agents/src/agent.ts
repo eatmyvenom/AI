@@ -17,7 +17,9 @@ export const ChatCompletionSchema = z.object({
   model: z.string().optional(),
   messages: z.array(MessageSchema).min(1, 'At least one message must be supplied'),
   temperature: z.number().min(0).max(2).optional(),
-  stream: z.boolean().optional()
+  stream: z.boolean().optional(),
+  // Optional agent selector; defaults handled by API wiring
+  agent: z.enum(['plan-act', 'chat']).optional()
 });
 
 export type ChatCompletionInput = z.input<typeof ChatCompletionSchema>;
@@ -28,6 +30,22 @@ export interface AgentUsage {
   totalTokens?: number;
 }
 
+export interface ReasoningDetail {
+  type: 'plan.step' | 'action.observation';
+  id: string;
+  format: 'anthropic-claude-v1';
+  index: number;
+  signature: null;
+  // Plan step fields (raw from model)
+  title?: string;
+  instructions?: string;
+  relevantContext?: string;
+  // Action fields (raw from model)
+  action?: string;
+  observation?: string;
+  addPlanStepsReason?: string;
+}
+
 export interface AgentRunResult {
   id: string;
   created: number;
@@ -36,6 +54,7 @@ export interface AgentRunResult {
   finishReason?: string;
   usage?: AgentUsage;
   steps: Array<StepResult<ToolSet>>;
+  reasoningDetails?: ReasoningDetail[];
 }
 
 export interface AgentConfig {

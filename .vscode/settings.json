@@ -9,6 +9,7 @@
     "source.fixAll.eslint": "always"
   },
   "conventionalCommits.scopes": [
-    "api"
+    "api",
+    "agents"
   ]
 }

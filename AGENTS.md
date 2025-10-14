@@ -15,9 +15,11 @@ This repository hosts a Turbo + pnpm monorepo for building AI agents on top of N
     - Non-streaming: returns `chat.completion` with `choices[0].message` and optional `usage`.
     - Streaming: `stream=true` returns SSE with `chat.completion.chunk` events and final `[DONE]`.
   - `GET /v1/models` and `GET /v1/models/:id` — Minimal model objects `{ id, object:"model", created, owned_by }`.
-  - Controller: `apps/api/src/modules/app.controller.ts` — Validates with `nestjs-zod`, invokes the chat agent, shapes OpenAI responses, and handles SSE.
+  - Controller: `apps/api/src/modules/chat/completions/completions.controller.ts` — Validates with `nestjs-zod`, invokes the configured agent, shapes OpenAI responses, and handles SSE.
   - Module wiring: `apps/api/src/modules/app.module.ts` — Registers the chat agent factory (`CHAT_AGENT_TOKEN`) and a global auth guard enforcing `Authorization: Bearer ...`.
   - Bootstrap: `apps/api/src/main.ts` — Starts Nest, attaches shared logger, installs a global OpenAI-style error filter, listens on `PORT` (default 3000).
+
+By default, `/v1/chat/completions` uses a router that selects the Plan‑Act agent. You can override per request with an `agent` field (`"plan-act" | "chat"`).
 
 ## Environment Variables
 
@@ -30,7 +32,7 @@ Set these in the project root `.env`:
 
 ## Agent Contract
 
-`createChatAgent` expects payloads shaped like OpenAI Chat Completions:
+`createChatAgent` and the router expect payloads shaped like OpenAI Chat Completions, with an optional `agent` selector:
 
 ```ts
 {
@@ -38,6 +40,7 @@ Set these in the project root `.env`:
   messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string }>;
   temperature?: number;
   stream?: boolean; // used by API layer for SSE
+  agent?: 'plan-act' | 'chat';
 }
 ```
 

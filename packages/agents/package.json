@@ -12,10 +12,18 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.23",
+    "@ai-sdk/cerebras": "^1.0.21",
+    "@ai-sdk/deepinfra": "^1.0.20",
+    "@ai-sdk/google": "^2.0.17",
+    "@ai-sdk/groq": "^2.0.22",
     "@ai-sdk/openai": "^2.0.38",
     "@ai-sdk/openai-compatible": "^1.0.19",
+    "@ai-sdk/xai": "^2.0.23",
+    "@openrouter/ai-sdk-provider": "^1.2.0",
+    "@packages/logger": "workspace:*",
+    "@packages/tools": "workspace:*",
     "ai": "^5.0.56",
-    "zod": "^4.1.11",
-    "@packages/tools": "workspace:*"
+    "zod": "^4.1.11"
   }
 }

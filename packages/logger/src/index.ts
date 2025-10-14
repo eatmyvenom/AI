@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
+
 import { LoggerService } from '@nestjs/common';
 import { bold, cyan, gray, magenta, red, yellow } from 'colorette';
 
@@ -17,6 +20,8 @@ interface FormatterOptions {
   namespace: string;
   message: string;
   metadata?: Record<string, unknown> | Error;
+  colorize?: boolean;
+  timestamp?: string;
 }
 
 const levelColors: Record<LogLevel, (value: string) => string> = {
@@ -26,26 +31,75 @@ const levelColors: Record<LogLevel, (value: string) => string> = {
   error: red
 };
 
-function formatEntry({ level, namespace, message, metadata }: FormatterOptions) {
-  const timestamp = new Date().toISOString();
-  const levelLabel = levelColors[level](level.toUpperCase().padEnd(5));
-  const scope = magenta(`[${namespace}]`);
-  const base = `${gray(timestamp)} ${levelLabel} ${scope} ${bold(message)}`;
+function sanitizeNamespace(namespace: string) {
+  const segments = namespace
+    .split(/[\\/]+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => segment.replace(/[^a-zA-Z0-9-_]/g, '-'));
+
+  return segments.join(sep) || 'app';
+}
+
+function applyColor(value: string, transformer: (input: string) => string, colorize: boolean) {
+  return colorize ? transformer(value) : value;
+}
+
+function formatEntry({ level, namespace, message, metadata, colorize = true, timestamp }: FormatterOptions) {
+  const entryTimestamp = timestamp ?? new Date().toISOString();
+  const levelText = level.toUpperCase().padEnd(5);
+  const scopeText = `[${namespace}]`;
+  const base = `${applyColor(entryTimestamp, gray, colorize)} ${applyColor(levelText, levelColors[level], colorize)} ${
+    applyColor(scopeText, magenta, colorize)
+  } ${applyColor(message, bold, colorize)}`;
 
   if (!metadata) {
     return base;
   }
 
   if (metadata instanceof Error) {
-    return `${base} ${red(metadata.stack ?? metadata.message)}`;
+    const errorDetails = metadata.stack ?? metadata.message;
+    return `${base} ${applyColor(errorDetails, red, colorize)}`;
   }
 
-  return `${base} ${gray(JSON.stringify(metadata))}`;
+  return `${base} ${applyColor(JSON.stringify(metadata), gray, colorize)}`;
 }
 
 export function createLogger(namespace = 'app'): StructuredLogger {
+  const timestamp = () => new Date().toISOString();
+  const safeNamespace = sanitizeNamespace(namespace);
+  const baseDir = resolve(process.cwd(), 'logs', safeNamespace);
+  const errorLogFile = join(baseDir, 'errors.log');
+  const generalLogFile = join(baseDir, 'logs.log');
+
+  try {
+    mkdirSync(baseDir, { recursive: true });
+  } catch {
+    // Ignore directory creation errors to avoid breaking the logger
+  }
+
+  const writeToFile = (filePath: string, line: string) => {
+    try {
+      appendFileSync(filePath, `${line}\n`);
+    } catch {
+      // Intentionally swallow errors to keep console logging functional
+    }
+  };
+
   const log = (level: LogLevel, message: string, metadata?: Record<string, unknown> | Error) => {
-    const entry = formatEntry({ level, namespace, message, metadata });
+    const entryTimestamp = timestamp();
+    const entry = formatEntry({ level, namespace, message, metadata, timestamp: entryTimestamp });
+    const logLine = formatEntry({
+      level,
+      namespace,
+      message,
+      metadata,
+      colorize: false,
+      timestamp: entryTimestamp
+    });
+
+    const targetFile = level === 'error' || level === 'warn' ? errorLogFile : generalLogFile;
+    writeToFile(targetFile, logLine);
 
     switch (level) {
       case 'debug':
