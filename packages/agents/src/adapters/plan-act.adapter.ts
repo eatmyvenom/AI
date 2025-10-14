@@ -52,6 +52,47 @@ function formatReasoningDetails(
   return details;
 }
 
+function formatThinkingBlock(
+  plan: z.infer<typeof PlanSchema>,
+  actions: z.infer<typeof actStepSchema>[]
+): string {
+  const planLines =
+    plan.steps && plan.steps.length > 0
+      ? plan.steps.map((step, index) => {
+          const segments = [
+            `${index + 1}. ${step.title}`,
+            `   Instructions: ${step.instructions}`,
+            `   Context: ${step.relevantContext}`
+          ];
+          return segments.join('\n');
+        })
+      : ['(no plan steps)'];
+
+  const actionLines =
+    actions.length > 0
+      ? actions.map((action, index) => {
+          const segments = [
+            `${index + 1}. Action: ${action.action}`,
+            `   Observation: ${action.observation}`
+          ];
+          if (action.addPlanStepsReason) {
+            segments.push(`   Plan Adjustment: ${action.addPlanStepsReason}`);
+          }
+          return segments.join('\n');
+        })
+      : ['(no actions recorded)'];
+
+  return [
+    '<think>',
+    'Plan:',
+    planLines.join('\n'),
+    '',
+    'Actions:',
+    actionLines.join('\n'),
+    '\n</think>'
+  ].join('\n');
+}
+
 type PlanActAdapterConfig = {
   instructions?: string;
   plan?: { steps?: number; tools?: ToolSet };
@@ -129,7 +170,12 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
           responseStream.text.catch((err: unknown) => { logger.error('Error getting response text', err instanceof Error ? err : { error: err }); return ''; }),
           responseStream.finishReason.catch((err: unknown) => { logger.error('Error getting finish reason', err instanceof Error ? err : { error: err }); return undefined as FinishReason | undefined; }),
         ]);
-        logger.info('Response phase completed', { textLength: text.length, finishReason });
+        const includeThinkingBlock = typeof input.reasoning_effort !== 'undefined';
+        const thinkingBlock = includeThinkingBlock ? formatThinkingBlock(plan, actions) : undefined;
+        const responseText = includeThinkingBlock
+          ? [thinkingBlock, text].filter((section): section is string => Boolean(section && section.length > 0)).join('\n\n')
+          : text;
+        logger.info('Response phase completed', { textLength: responseText.length, finishReason, includeThinkingBlock });
 
         // Format reasoning details from raw model outputs
         const reasoningDetails = formatReasoningDetails(plan, actions);
@@ -139,13 +185,13 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
           id: randomUUID(),
           created: Math.floor(Date.now() / 1000),
           model: agent.modelId,
-          text,
+          text: responseText,
           finishReason,
           usage: undefined,
           steps: [],
           reasoningDetails
         };
-        logger.info('PlanActAdapter.run completed successfully', { resultId: result.id, textLength: text.length, reasoningCount: reasoningDetails.length });
+        logger.info('PlanActAdapter.run completed successfully', { resultId: result.id, textLength: responseText.length, reasoningCount: reasoningDetails.length });
         return result;
       } catch (error) {
         logger.error('PlanActAdapter.run failed', error instanceof Error ? error : { error });
@@ -165,56 +211,105 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
 
       const messages = input.messages as Array<ModelMessage>;
 
-      let finishReasonResolve: (r: FinishReason | undefined) => void;
-      const finishReason = new Promise<FinishReason | undefined>((resolve) => {
-        finishReasonResolve = resolve;
-      });
+      const finishController = createFinishReasonTracker();
 
       async function* textStream() {
-        // Plan
-        const planStream = agent.runPlanPhase(messages);
-        let latestValidPlan: z.infer<typeof PlanSchema> | undefined;
-        const planPartial = (async () => {
-          for await (const partial of planStream.experimental_partialOutputStream as AsyncIterable<unknown>) {
-            if (partial && typeof partial === 'object' && 'steps' in partial) {
-              latestValidPlan = partial as z.infer<typeof PlanSchema>;
+        let plan: z.infer<typeof PlanSchema> = { steps: [] };
+        let actions: z.infer<typeof actStepSchema>[] = [];
+
+        try {
+          const planStream = agent.runPlanPhase(messages);
+          let latestValidPlan: z.infer<typeof PlanSchema> | undefined;
+          const planPartialCollector = (async () => {
+            for await (const partial of planStream.experimental_partialOutputStream as AsyncIterable<unknown>) {
+              if (partial && typeof partial === 'object' && 'steps' in partial) {
+                latestValidPlan = partial as z.infer<typeof PlanSchema>;
+              }
             }
+          })();
+          // Drain the full stream to completion so partial collector can capture the latest plan
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-empty
+          for await (const _ of planStream.fullStream) {}
+          await planPartialCollector;
+          plan = latestValidPlan ?? { steps: [] };
+        } catch (error) {
+          finishController.resolveDefault();
+          throw error;
+        }
+
+        try {
+          const actStream = agent.runActPhase(messages, plan);
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-empty
+          for await (const _chunk of actStream) {}
+          actions = (actStream as { collectedActions?: z.infer<typeof actStepSchema>[] }).collectedActions ?? [];
+        } catch (error) {
+          finishController.resolveDefault();
+          throw error;
+        }
+
+        const responseStream = agent.runResponsePhase(messages, plan, actions);
+
+        const finishWatcher = (async () => {
+          try {
+            const reason = await responseStream.finishReason;
+            finishController.resolve(reason ?? 'stop');
+          } catch {
+            finishController.resolveDefault();
           }
         })();
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-empty
-        for await (const _ of planStream.fullStream) {}
-        await planPartial;
-        const plan = latestValidPlan ?? { steps: [] };
 
-        // Act
-        const actStream = agent.runActPhase(messages, plan);
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-empty
-        for await (const _chunk of actStream) {}
-        const actions = (actStream as { collectedActions?: z.infer<typeof actStepSchema>[] }).collectedActions ?? [];
-
-        // Final response: stream only the user-visible text deltas
-        const responseStream = agent.runResponsePhase(messages, plan, actions);
-        const fr = responseStream.finishReason.catch(() => undefined as FinishReason | undefined).then((r) => {
-          finishReasonResolve(r);
-        });
         try {
+          if (typeof input.reasoning_effort !== 'undefined') {
+            const thinkingBlock = formatThinkingBlock(plan, actions);
+            if (thinkingBlock.length > 0) {
+              yield `${thinkingBlock}\n\n`;
+            }
+          }
+
           for await (const delta of responseStream.textStream) {
             if (delta && delta.length > 0) {
               yield delta;
             }
           }
+        } catch (error) {
+          finishController.resolveDefault();
+          throw error;
         } finally {
-          await fr;
+          await finishWatcher.catch(() => undefined);
+          finishController.resolveDefault();
         }
       }
 
       return {
-        // Only fields used by the API controller are required here
         textStream: textStream(),
-        finishReason,
+        finishReason: finishController.promise
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any as StreamTextResult<ToolSet, unknown>;
     }
   };
 }
 
+function createFinishReasonTracker() {
+  let isResolved = false;
+  let resolver: (value: FinishReason | undefined) => void = () => {};
+
+  const promise = new Promise<FinishReason | undefined>((resolve) => {
+    resolver = (value) => {
+      if (isResolved) {
+        return;
+      }
+      isResolved = true;
+      resolve(value);
+    };
+  });
+
+  return {
+    promise,
+    resolve(value: FinishReason | undefined) {
+      resolver(value);
+    },
+    resolveDefault() {
+      resolver('stop');
+    }
+  };
+}

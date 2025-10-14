@@ -18,6 +18,7 @@ export const ChatCompletionSchema = z.object({
   messages: z.array(MessageSchema).min(1, 'At least one message must be supplied'),
   temperature: z.number().min(0).max(2).optional(),
   stream: z.boolean().optional(),
+  reasoning_effort: z.string().optional(),
   // Optional agent selector; defaults handled by API wiring
   agent: z.enum(['plan-act', 'chat']).optional()
 });

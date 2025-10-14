@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Body, Controller, Inject, InternalServerErrorException, Post, Res } from '@nestjs/common';
 import type { AgentRunResult, ChatAgent, ChatCompletionInput, ReasoningDetail } from '@packages/agents';
 import { ChatCompletionSchema, resolveLanguageModel } from '@packages/agents';
-import type { FinishReason } from 'ai';
+import type { FinishReason, LanguageModelUsage } from 'ai';
 import { ZodValidationPipe } from 'nestjs-zod';
 
 import { CHAT_AGENT_TOKEN } from '../chat.constants';
@@ -94,13 +94,7 @@ function mapAgentResultToOpenAIResponse(result: AgentRunResult): OpenAIChatCompl
         finish_reason: finishReason
       }
     ],
-    usage: result.usage
-      ? {
-          prompt_tokens: result.usage.inputTokens ?? 0,
-          completion_tokens: result.usage.outputTokens ?? 0,
-          total_tokens: result.usage.totalTokens ?? 0
-        }
-      : undefined,
+    usage: mapUsageToOpenAI(result.usage),
     _debug: { steps: result.steps }
   };
 }
@@ -123,6 +117,7 @@ type ChatCompletionChunkEvent = {
       finish_reason: FinishReason | 'error' | null;
     }
   ];
+  usage?: OpenAIUsage;
 };
 
 interface SseResponseLike {
@@ -167,6 +162,7 @@ function handleStreamingResponse(res: SseResponseLike, agent: ChatAgent, payload
 
   const stream = agent.stream(payload);
   const finishReasonPromise: Promise<FinishReason | undefined> = stream.finishReason.catch(() => undefined);
+  const usagePromise = getUsagePromise(stream);
 
   writeSseEvent(res, initialChunk(context));
 
@@ -187,13 +183,18 @@ function handleStreamingResponse(res: SseResponseLike, agent: ChatAgent, payload
       }
 
       const finishReason = (await finishReasonPromise) ?? 'stop';
+      const usage = usagePromise ? await usagePromise : undefined;
 
       writeSseEvent(
         res,
-        chunkEvent(context, {
-          delta: {},
-          finish_reason: finishReason
-        })
+        chunkEvent(
+          context,
+          {
+            delta: {},
+            finish_reason: finishReason
+          },
+          usage ? mapUsageToOpenAI(usage) : undefined
+        )
       );
     } catch {
       writeSseEvent(
@@ -243,9 +244,10 @@ function chunkEvent(
   payload: {
     delta: Record<string, unknown>;
     finish_reason: FinishReason | 'error' | null;
-  }
+  },
+  usage?: OpenAIUsage
 ): ChatCompletionChunkEvent {
-  return {
+  const event: ChatCompletionChunkEvent = {
     id: context.id,
     object: 'chat.completion.chunk',
     created: context.created,
@@ -257,5 +259,44 @@ function chunkEvent(
         finish_reason: payload.finish_reason
       }
     ]
+  };
+
+  if (usage) {
+    event.usage = usage;
+  }
+
+  return event;
+}
+
+function getUsagePromise(
+  stream: ReturnType<ChatAgent['stream']>
+): Promise<LanguageModelUsage | undefined> | undefined {
+  const candidate = stream as {
+    totalUsage?: Promise<LanguageModelUsage>;
+    usage?: Promise<LanguageModelUsage>;
+  };
+
+  if (candidate.totalUsage && typeof candidate.totalUsage.then === 'function') {
+    return candidate.totalUsage.catch(() => undefined);
+  }
+
+  if (candidate.usage && typeof candidate.usage.then === 'function') {
+    return candidate.usage.catch(() => undefined);
+  }
+
+  return undefined;
+}
+
+function mapUsageToOpenAI(
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }
+): OpenAIUsage | undefined {
+  if (!usage) {
+    return undefined;
+  }
+
+  return {
+    prompt_tokens: usage.inputTokens ?? 0,
+    completion_tokens: usage.outputTokens ?? 0,
+    total_tokens: usage.totalTokens ?? 0
   };
 }

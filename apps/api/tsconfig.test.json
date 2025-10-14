@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
+  },
+  "references": [
+    { "path": "../../packages/agents" },
+    { "path": "../../packages/tools" },
+    { "path": "../../packages/logger" }
+  ],
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
