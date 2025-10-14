@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { Body, Controller, Inject, InternalServerErrorException, Post, Res } from '@nestjs/common';
 import type { AgentRunResult, ChatAgent, ChatCompletionInput, ReasoningDetail } from '@packages/agents';
-import { ChatCompletionSchema, resolveLanguageModel, resolveModel } from '@packages/agents';
+import { ChatCompletionSchema, resolveLanguageModel } from '@packages/agents';
 import type { FinishReason } from 'ai';
 import { ZodValidationPipe } from 'nestjs-zod';
 
@@ -130,7 +130,7 @@ function isSseResponseLike(value: unknown): value is SseResponseLike {
 function handleStreamingResponse(res: SseResponseLike, agent: ChatAgent, payload: ChatCompletionInput): void {
   // Display the actual model id chosen by the current agent selection
   const model = (() => {
-    const requested = (payload as any).agent as 'plan-act' | 'chat' | undefined;
+    const requested = payload.agent;
     if (requested === 'chat') {
       return payload.model ?? process.env.MODEL ?? 'gpt-4.1-mini';
     }

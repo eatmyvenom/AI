@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '@packages/logger';
 import { getActiveTools } from '@packages/tools';
+import type { ModelMessage, FinishReason, ToolSet, StreamTextResult } from 'ai';
+import type { z } from 'zod';
+
 import type { ChatAgent, ChatCompletionInput, AgentRunResult, ReasoningDetail } from '../agent';
 import { PlanActAgent, PlanSchema, actStepSchema } from '../agents';
-import type { ModelMessage, FinishReason, ToolSet } from 'ai';
-import type { z } from 'zod';
 
 const logger = createLogger('agents:plan-act-adapter');
 
@@ -79,26 +80,25 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
         // Phase 1: plan
         logger.debug('Starting Plan phase');
         const planStream = agent.runPlanPhase(messages);
-        let latestValidPlan: any | undefined;
+        let latestValidPlan: z.infer<typeof PlanSchema> | undefined;
 
         const planPartial = (async () => {
           for await (const partial of planStream.experimental_partialOutputStream as AsyncIterable<unknown>) {
-            if (partial && typeof partial === 'object') {
-              latestValidPlan = partial;
+            if (partial && typeof partial === 'object' && 'steps' in partial) {
+              latestValidPlan = partial as z.infer<typeof PlanSchema>;
               logger.debug('Plan partial received', { hasSteps: 'steps' in partial });
             }
           }
         })();
 
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         for await (const _ of planStream.fullStream) {
           // drain
         }
         await planPartial;
 
         // If the plan shape isn't valid, initialize empty plan
-        const plan = (latestValidPlan && typeof latestValidPlan === 'object' && 'steps' in latestValidPlan)
-          ? (latestValidPlan as any)
-          : { steps: [] };
+        const plan = latestValidPlan ?? { steps: [] };
 
         logger.info('Plan phase completed', { stepCount: plan.steps?.length ?? 0 });
 
@@ -107,6 +107,7 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
         const actStream = agent.runActPhase(messages, plan);
         let chunkCount = 0;
         try {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           for await (const _chunk of actStream) {
             chunkCount++;
             if (chunkCount % 10 === 0) {
@@ -118,15 +119,15 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
           logger.error('Act phase stream error', error instanceof Error ? error : { error, chunkCount });
           throw error;
         }
-        const actions = (actStream as any).collectedActions ?? [];
+        const actions = (actStream as { collectedActions?: z.infer<typeof actStepSchema>[] }).collectedActions ?? [];
         logger.info('Act phase completed', { actionCount: actions.length, totalChunks: chunkCount });
 
         // Phase 3: final response — collect text and finishReason
         logger.debug('Starting Response phase');
-        const responseStream = agent.runResponsePhase(messages, plan as any, actions);
+        const responseStream = agent.runResponsePhase(messages, plan, actions);
         const [text, finishReason] = await Promise.all([
-          responseStream.text.catch((err) => { logger.error('Error getting response text', err); return ''; }),
-          responseStream.finishReason.catch((err) => { logger.error('Error getting finish reason', err); return undefined as FinishReason | undefined; }),
+          responseStream.text.catch((err: unknown) => { logger.error('Error getting response text', err instanceof Error ? err : { error: err }); return ''; }),
+          responseStream.finishReason.catch((err: unknown) => { logger.error('Error getting finish reason', err instanceof Error ? err : { error: err }); return undefined as FinishReason | undefined; }),
         ]);
         logger.info('Response phase completed', { textLength: text.length, finishReason });
 
@@ -172,27 +173,27 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
       async function* textStream() {
         // Plan
         const planStream = agent.runPlanPhase(messages);
-        let latestValidPlan: any | undefined;
+        let latestValidPlan: z.infer<typeof PlanSchema> | undefined;
         const planPartial = (async () => {
           for await (const partial of planStream.experimental_partialOutputStream as AsyncIterable<unknown>) {
-            if (partial && typeof partial === 'object') {
-              latestValidPlan = partial;
+            if (partial && typeof partial === 'object' && 'steps' in partial) {
+              latestValidPlan = partial as z.infer<typeof PlanSchema>;
             }
           }
         })();
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-empty
         for await (const _ of planStream.fullStream) {}
         await planPartial;
-        const plan = (latestValidPlan && typeof latestValidPlan === 'object' && 'steps' in latestValidPlan)
-          ? (latestValidPlan as any)
-          : { steps: [] };
+        const plan = latestValidPlan ?? { steps: [] };
 
         // Act
         const actStream = agent.runActPhase(messages, plan);
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-empty
         for await (const _chunk of actStream) {}
-        const actions = (actStream as any).collectedActions ?? [];
+        const actions = (actStream as { collectedActions?: z.infer<typeof actStepSchema>[] }).collectedActions ?? [];
 
         // Final response: stream only the user-visible text deltas
-        const responseStream = agent.runResponsePhase(messages, plan as any, actions);
+        const responseStream = agent.runResponsePhase(messages, plan, actions);
         const fr = responseStream.finishReason.catch(() => undefined as FinishReason | undefined).then((r) => {
           finishReasonResolve(r);
         });
@@ -211,7 +212,8 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
         // Only fields used by the API controller are required here
         textStream: textStream(),
         finishReason,
-      } as unknown as ReturnType<any>;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any as StreamTextResult<ToolSet, unknown>;
     }
   };
 }
