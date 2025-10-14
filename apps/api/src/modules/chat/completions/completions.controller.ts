@@ -43,18 +43,33 @@ export class CompletionsController {
     @Body(new ZodValidationPipe(ChatCompletionSchema)) payload: ChatCompletionInput,
     @Res({ passthrough: true }) res: unknown
   ): Promise<OpenAIChatCompletion | void> {
-    if (payload.stream) {
+    const normalizedPayload = normalizeAgentSelection(payload);
+
+    if (normalizedPayload.stream) {
       if (!isSseResponseLike(res)) {
         throw new InternalServerErrorException('HTTP adapter does not support streaming responses');
       }
 
-      handleStreamingResponse(res, this.agent, payload);
+      handleStreamingResponse(res, this.agent, normalizedPayload);
       return;
     }
 
-    const result = await this.agent.run(payload);
+    const result = await this.agent.run(normalizedPayload);
     return mapAgentResultToOpenAIResponse(result);
   }
+}
+
+function normalizeAgentSelection(input: ChatCompletionInput): ChatCompletionInput {
+  if (input.model === 'plan-act') {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { model: _removed, ...rest } = input;
+    return {
+      ...rest,
+      agent: 'plan-act'
+    };
+  }
+
+  return input;
 }
 
 function mapAgentResultToOpenAIResponse(result: AgentRunResult): OpenAIChatCompletion {

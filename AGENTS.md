@@ -14,10 +14,14 @@ This repository hosts a Turbo + pnpm monorepo for building AI agents on top of N
   - `POST /v1/chat/completions` — Accepts `{ model?, messages, temperature?, stream? }`.
     - Non-streaming: returns `chat.completion` with `choices[0].message` and optional `usage`.
     - Streaming: `stream=true` returns SSE with `chat.completion.chunk` events and final `[DONE]`.
+  - `GET /v1/health` — Basic healthcheck returning `{ status, uptime, timestamp }`. This route is public (no auth) to support client probes.
   - `GET /v1/models` and `GET /v1/models/:id` — Minimal model objects `{ id, object:"model", created, owned_by }`.
+    - Response always includes a virtual `plan-act` model so UI clients (e.g., Open WebUI) can pick it; selecting it routes `POST /v1/chat/completions` through the Plan‑Act agent automatically.
   - Controller: `apps/api/src/modules/chat/completions/completions.controller.ts` — Validates with `nestjs-zod`, invokes the configured agent, shapes OpenAI responses, and handles SSE.
   - Module wiring: `apps/api/src/modules/app.module.ts` — Registers the chat agent factory (`CHAT_AGENT_TOKEN`) and a global auth guard enforcing `Authorization: Bearer ...`.
   - Bootstrap: `apps/api/src/main.ts` — Starts Nest, attaches shared logger, installs a global OpenAI-style error filter, listens on `PORT` (default 3000).
+    - Global CORS is enabled (`GET`, `POST`, `OPTIONS`) so browser clients can preflight `/v1/models` and `/v1/chat/completions`.
+  - Unknown endpoints (404) are logged in `apps/api/src/main.ts` so you can see clients probing non-existent routes.
 
 By default, `/v1/chat/completions` uses a router that selects the Plan‑Act agent. You can override per request with an `agent` field (`"plan-act" | "chat"`).
 

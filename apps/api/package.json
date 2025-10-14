@@ -15,12 +15,15 @@
     "@nestjs/common": "^11.1.6",
     "@nestjs/core": "^11.1.6",
     "@nestjs/platform-express": "^11.1.6",
-    "nestjs-zod": "^5.0.1",
-    "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2",
-    "ai": "^5.0.56",
     "@packages/agents": "workspace:*",
     "@packages/logger": "workspace:*",
-    "@packages/tools": "workspace:*"
+    "@packages/tools": "workspace:*",
+    "ai": "^5.0.56",
+    "nestjs-zod": "^5.0.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3"
   }
 }

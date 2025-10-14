@@ -91,13 +91,17 @@ Tip: Instead of logging raw chunks, inspect `chunk.type`/`chunk.textDelta` (per 
 The Nest API exposes OpenAI‑compatible routes and now routes `/v1/chat/completions` to the Plan‑Act agent by default. You can also opt into the legacy chat agent per‑request via an `agent` field.
 
 Routes:
-- `POST /v1/chat/completions` — Non‑streaming and SSE streaming (`stream=true`). Controller: `apps/api/src/modules/chat/completions/completions.controller.ts:1`
-- `GET /v1/models`, `GET /v1/models/:id` — Minimal model objects. Controller: `apps/api/src/modules/models/model.controller.ts:1`
+- `POST /v1/chat/completions` — Non-streaming and SSE streaming (`stream=true`). Controller: `apps/api/src/modules/chat/completions/completions.controller.ts:1`
+- `GET /v1/models`, `GET /v1/models/:id` — Minimal model objects (including a virtual `plan-act` model so UI clients can target the Plan-Act agent). Controller: `apps/api/src/modules/models/model.controller.ts:1`
+- `GET /v1/health` — Simple health check that returns `{ status, uptime, timestamp }`. Controller: `apps/api/src/modules/health/health.controller.ts:1`
 
 Wiring:
-- App module wires `CHAT_AGENT_TOKEN` to a router that selects Plan‑Act by default: `apps/api/src/modules/app.module.ts:1`
+- App module wires `CHAT_AGENT_TOKEN` to a router that selects Plan-Act by default: `apps/api/src/modules/app.module.ts:1`
 - The router lives in `packages/agents/src/router.ts:1` and supports `agent: 'plan-act' | 'chat'`.
-- Global `Authorization: Bearer …` guard and an OpenAI‑style error filter are installed in `apps/api/src/main.ts:1` and `apps/api/src/filters/openai-error.filter.ts:1`.
+- Global `Authorization: Bearer …` guard and an OpenAI-style error filter are installed in `apps/api/src/main.ts:1` and `apps/api/src/filters/openai-error.filter.ts:1`.
+- The auth guard allows unauthenticated access to `/v1/health` and to `OPTIONS` preflight requests so browser clients (Open WebUI, etc.) can probe endpoints successfully.
+- Unknown endpoints (404) are logged after response via middleware in `apps/api/src/main.ts`.
+- CORS is enabled for `GET`, `POST`, and `OPTIONS`, letting browser clients issue preflight requests to `/v1/models` and `/v1/chat/completions` without extra wiring.
 
 Example requests (Plan‑Act default):
 - Non‑streaming

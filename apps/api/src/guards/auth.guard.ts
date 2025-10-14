@@ -50,6 +50,18 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('Missing or invalid Authorization header');
     }
 
+    const reqWithMeta = requestCandidate as { url?: string; method?: string };
+    const method = (reqWithMeta.method ?? '').toUpperCase();
+    if (method === 'OPTIONS') {
+      return true;
+    }
+
+    // Allow unauthenticated health checks
+    const url = (reqWithMeta.url ?? '').split('?')[0];
+    if (url === '/v1/health') {
+      return true;
+    }
+
     const headers = requestCandidate.headers;
     const headerValue = getHeader(headers, 'authorization') ?? getHeader(headers, 'Authorization');
     const token = extractBearerToken(headerValue);
