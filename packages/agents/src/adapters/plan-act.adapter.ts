@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '@packages/logger';
-import { getActiveTools } from '@packages/tools';
-import type { ModelMessage, FinishReason, ToolSet, StreamTextResult } from 'ai';
+import type { ModelMessage, FinishReason, ToolSet, StreamTextResult, LanguageModelUsage } from 'ai';
 import type { z } from 'zod';
 
 import type { ChatAgent, ChatCompletionInput, AgentRunResult, ReasoningDetail } from '../agent';
 import { PlanActAgent, PlanSchema, actStepSchema } from '../agents';
+import { mergeTools } from '../tools';
 
 const logger = createLogger('agents:plan-act-adapter');
 
@@ -100,7 +100,7 @@ type PlanActAdapterConfig = {
 };
 
 export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): ChatAgent {
-  return {
+  const adapter: ChatAgent = {
     async run(input: ChatCompletionInput): Promise<AgentRunResult> {
       logger.info('PlanActAdapter.run called', { model: input.model, messageCount: input.messages.length });
 
@@ -108,11 +108,26 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
 
       try {
         logger.debug('Creating PlanActAgent instance', { model, hasInstructions: Boolean(config.instructions) });
+
+        // Merge client-provided tools with built-in tools
+        const mergedTools = mergeTools({
+          clientTools: input.tools as unknown as any[], // eslint-disable-line @typescript-eslint/no-explicit-any
+          enabledBuiltinTools: input.enabled_builtin_tools as string[] | undefined,
+          toolChoice: input.tool_choice as unknown as any, // eslint-disable-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+          parallelToolCalls: input.parallel_tool_calls as boolean | undefined,
+        });
+
+        logger.info('Tools merged for plan-act agent', {
+          totalTools: Object.keys(mergedTools.toolSet).length,
+          clientTools: mergedTools.clientToolNames.length,
+          builtinTools: mergedTools.builtinToolNames.length,
+        });
+
         const agent = new PlanActAgent({
           model,
           instructions: config.instructions,
-          plan: { steps: config.plan?.steps, tools: config.plan?.tools ?? getActiveTools() },
-          act: { steps: config.act?.steps, tools: config.act?.tools ?? getActiveTools() }
+          plan: { steps: config.plan?.steps, tools: config.plan?.tools ?? mergedTools.toolSet },
+          act: { steps: config.act?.steps, tools: config.act?.tools ?? mergedTools.toolSet }
         });
         logger.info('PlanActAgent created successfully', { modelId: agent.modelId });
 
@@ -199,117 +214,282 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
       }
     },
 
-    // Streaming interface compatible enough for CompletionsController
     stream(input: ChatCompletionInput) {
+      logger.info('PlanActAdapter.stream called', { model: input.model, messageCount: input.messages.length });
+      const startTime = Date.now();
+
       const model = input.model;
-      const agent = new PlanActAgent({
-        model,
-        instructions: config.instructions,
-        plan: { steps: config.plan?.steps, tools: config.plan?.tools ?? getActiveTools() },
-        act: { steps: config.act?.steps, tools: config.act?.tools ?? getActiveTools() }
+      const includeReasoning = typeof input.reasoning_effort !== 'undefined';
+
+      // Create promises for finish reason, usage, and phase coordination
+      let resolveFinishReason!: (value: FinishReason | undefined) => void;
+      let resolveUsage!: (value: LanguageModelUsage | undefined) => void;
+      let resolveReasoningComplete!: () => void;
+      let resolvePlanComplete!: (plan: z.infer<typeof PlanSchema>) => void;
+      let resolveActComplete!: (actions: z.infer<typeof actStepSchema>[]) => void;
+
+      const finishReasonPromise = new Promise<FinishReason | undefined>((resolve) => {
+        resolveFinishReason = resolve;
       });
 
-      const messages = input.messages as Array<ModelMessage>;
+      const usagePromise = new Promise<LanguageModelUsage | undefined>((resolve) => {
+        resolveUsage = resolve;
+      });
 
-      const finishController = createFinishReasonTracker();
+      const reasoningCompletePromise = new Promise<void>((resolve) => {
+        resolveReasoningComplete = resolve;
+      });
 
-      async function* textStream() {
-        let plan: z.infer<typeof PlanSchema> = { steps: [] };
-        let actions: z.infer<typeof actStepSchema>[] = [];
+      const planCompletePromise = new Promise<z.infer<typeof PlanSchema>>((resolve) => {
+        resolvePlanComplete = resolve;
+      });
 
+      const actCompletePromise = new Promise<z.infer<typeof actStepSchema>[]>((resolve) => {
+        resolveActComplete = resolve;
+      });
+
+      // Start plan and act phases immediately (not inside a generator)
+      // This prevents deadlock when consuming reasoningStream before textStream
+      const executionPromise = (async () => {
         try {
+          logger.info('Stream: Creating PlanActAgent instance', { model, hasInstructions: Boolean(config.instructions) });
+
+          // Merge client-provided tools with built-in tools
+          const mergedTools = mergeTools({
+            clientTools: input.tools as unknown as any[], // eslint-disable-line @typescript-eslint/no-explicit-any
+            enabledBuiltinTools: input.enabled_builtin_tools as string[] | undefined,
+            toolChoice: input.tool_choice as unknown as any, // eslint-disable-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+            parallelToolCalls: input.parallel_tool_calls as boolean | undefined,
+          });
+
+          logger.info('Stream: Tools merged for plan-act agent', {
+            totalTools: Object.keys(mergedTools.toolSet).length,
+            clientTools: mergedTools.clientToolNames.length,
+            builtinTools: mergedTools.builtinToolNames.length,
+          });
+
+          const agent = new PlanActAgent({
+            model,
+            instructions: config.instructions,
+            plan: { steps: config.plan?.steps, tools: config.plan?.tools ?? mergedTools.toolSet },
+            act: { steps: config.act?.steps, tools: config.act?.tools ?? mergedTools.toolSet }
+          });
+          logger.info('Stream: PlanActAgent created', { modelId: agent.modelId, elapsed: Date.now() - startTime });
+
+          const messages = input.messages as Array<ModelMessage>;
+
+          // Phase 1: Plan
+          logger.debug('Stream: Starting Plan phase');
+          const planStartTime = Date.now();
           const planStream = agent.runPlanPhase(messages);
           let latestValidPlan: z.infer<typeof PlanSchema> | undefined;
-          const planPartialCollector = (async () => {
+
+          const planPartial = (async () => {
             for await (const partial of planStream.experimental_partialOutputStream as AsyncIterable<unknown>) {
               if (partial && typeof partial === 'object' && 'steps' in partial) {
                 latestValidPlan = partial as z.infer<typeof PlanSchema>;
+                logger.debug('Stream: Plan partial received', { hasSteps: 'steps' in partial });
               }
             }
           })();
-          // Drain the full stream to completion so partial collector can capture the latest plan
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-empty
-          for await (const _ of planStream.fullStream) {}
-          await planPartialCollector;
-          plan = latestValidPlan ?? { steps: [] };
-        } catch (error) {
-          finishController.resolveDefault();
-          throw error;
-        }
 
-        try {
+          // Drain plan stream with timeout
+          const planTimeout = 120000; // 120 seconds
+          const planResult = await Promise.race([
+            (async () => {
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
+              for await (const _ of planStream.fullStream) {
+                // drain
+              }
+              await planPartial;
+              return 'completed';
+            })(),
+            new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), planTimeout))
+          ]);
+
+          if (planResult === 'timeout') {
+            logger.error('Stream: Plan phase timed out', { timeout: planTimeout });
+            throw new Error('Plan phase timed out after 30 seconds');
+          }
+
+          const plan = latestValidPlan ?? { steps: [] };
+          const planElapsed = Date.now() - planStartTime;
+          logger.info('Stream: Plan phase completed', { stepCount: plan.steps?.length ?? 0, elapsed: planElapsed });
+
+          // Notify reasoning stream that plan is ready
+          resolvePlanComplete(plan);
+
+          // Phase 2: Act
+          logger.debug('Stream: Starting Act phase');
+          const actStartTime = Date.now();
           const actStream = agent.runActPhase(messages, plan);
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-empty
-          for await (const _chunk of actStream) {}
-          actions = (actStream as { collectedActions?: z.infer<typeof actStepSchema>[] }).collectedActions ?? [];
+          let chunkCount = 0;
+
+          // Drain act stream with timeout
+          const actTimeout = 120000; // 120 seconds
+          const actResult = await Promise.race([
+            (async () => {
+              try {
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                for await (const _chunk of actStream) {
+                  chunkCount++;
+                  if (chunkCount % 10 === 0) {
+                    logger.debug(`Stream: Act phase streaming - received ${chunkCount} chunks`);
+                  }
+                }
+                logger.debug(`Stream: Act phase stream completed - total chunks: ${chunkCount}`);
+                return 'completed';
+              } catch (error) {
+                logger.error('Stream: Act phase stream error', error instanceof Error ? error : { error, chunkCount });
+                throw error;
+              }
+            })(),
+            new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), actTimeout))
+          ]);
+
+          if (actResult === 'timeout') {
+            logger.error('Stream: Act phase timed out', { timeout: actTimeout, chunksSoFar: chunkCount });
+            throw new Error(`Act phase timed out after ${actTimeout / 1000} seconds`);
+          }
+
+          const actions = (actStream as { collectedActions?: z.infer<typeof actStepSchema>[] }).collectedActions ?? [];
+          const actElapsed = Date.now() - actStartTime;
+          logger.info('Stream: Act phase completed', { actionCount: actions.length, totalChunks: chunkCount, elapsed: actElapsed });
+
+          // Notify reasoning stream that actions are ready
+          resolveActComplete(actions);
+
+          return { agent, messages, plan, actions, planElapsed, actElapsed };
         } catch (error) {
-          finishController.resolveDefault();
+          logger.error('Stream: Fatal error in plan/act phases', error instanceof Error ? error : { error });
+          resolvePlanComplete({ steps: [] });
+          resolveActComplete([]);
+          resolveFinishReason('error' as FinishReason);
+          resolveUsage(undefined);
           throw error;
         }
+      })();
 
-        const responseStream = agent.runResponsePhase(messages, plan, actions);
-
-        const finishWatcher = (async () => {
-          try {
-            const reason = await responseStream.finishReason;
-            finishController.resolve(reason ?? 'stop');
-          } catch {
-            finishController.resolveDefault();
-          }
-        })();
+      // Reasoning stream: yields plan + action content as reasoning_content deltas
+      const reasoningStream = (async function* () {
+        if (!includeReasoning) {
+          return; // No reasoning if not requested
+        }
 
         try {
-          if (typeof input.reasoning_effort !== 'undefined') {
-            const thinkingBlock = formatThinkingBlock(plan, actions);
-            if (thinkingBlock.length > 0) {
-              yield `${thinkingBlock}\n\n`;
+          logger.debug('ReasoningStream: Waiting for plan to complete');
+          const plan = await planCompletePromise;
+          logger.info('ReasoningStream: Plan received', { stepCount: plan.steps?.length ?? 0 });
+
+          // Stream plan steps as reasoning content
+          if (plan.steps && plan.steps.length > 0) {
+            for (const step of plan.steps) {
+              const reasoning = `Plan: ${step.title}\nInstructions: ${step.instructions}\nContext: ${step.relevantContext}\n\n`;
+              yield reasoning;
+              logger.debug('ReasoningStream: Yielded plan step', { title: step.title });
             }
           }
 
-          for await (const delta of responseStream.textStream) {
-            if (delta && delta.length > 0) {
-              yield delta;
+          logger.debug('ReasoningStream: Waiting for actions to complete');
+          const actions = await actCompletePromise;
+          logger.info('ReasoningStream: Actions received', { actionCount: actions.length });
+
+          // Stream actions as reasoning content
+          for (const action of actions) {
+            let reasoning = `Action: ${action.action}\nObservation: ${action.observation}\n`;
+            if (action.addPlanStepsReason) {
+              reasoning += `Plan Adjustment: ${action.addPlanStepsReason}\n`;
+            }
+            reasoning += '\n';
+            yield reasoning;
+            logger.debug('ReasoningStream: Yielded action', { action: action.action });
+          }
+
+          logger.info('ReasoningStream: All reasoning content streamed');
+        } catch (error) {
+          logger.error('ReasoningStream: Error streaming reasoning', error instanceof Error ? error : { error });
+        } finally {
+          resolveReasoningComplete();
+        }
+      })();
+
+      // Text stream: yields final answer content as regular content deltas
+      const textStream = (async function* () {
+        try {
+          // Wait for plan/act phases to complete
+          const { agent, messages, plan, actions, planElapsed, actElapsed } = await executionPromise;
+
+          // Wait for reasoning to complete before starting response
+          if (includeReasoning) {
+            logger.debug('Stream: Waiting for reasoning stream to complete');
+            await reasoningCompletePromise;
+            logger.info('Stream: Reasoning stream completed');
+          }
+
+          // Phase 3: Response - stream deltas in real-time
+          logger.debug('Stream: Starting Response phase (real-time streaming)');
+          const responseStartTime = Date.now();
+          const responseStream = agent.runResponsePhase(messages, plan, actions);
+
+          let totalChars = 0;
+          let firstContentYielded = false;
+
+          // Stream the response text deltas as they arrive
+          for await (const chunk of responseStream.textStream) {
+            if (typeof chunk === 'string' && chunk.length > 0) {
+              if (!firstContentYielded) {
+                const timeToFirstContent = Date.now() - startTime;
+                logger.info('Stream: First content delta yielded', { timeToFirstContent, chunkLength: chunk.length });
+                firstContentYielded = true;
+              }
+              totalChars += chunk.length;
+              yield chunk;
             }
           }
+
+          const responseElapsed = Date.now() - responseStartTime;
+          logger.info('Stream: Response phase completed', { totalChars, elapsed: responseElapsed });
+
+          // Get finish reason and usage
+          const [finishReason] = await Promise.all([
+            responseStream.finishReason.catch((err: unknown) => {
+              logger.error('Stream: Error getting finish reason', err instanceof Error ? err : { error: err });
+              return undefined as FinishReason | undefined;
+            })
+          ]);
+
+          const totalElapsed = Date.now() - startTime;
+          logger.info('Stream: All phases completed', {
+            totalElapsed,
+            finishReason,
+            planTime: planElapsed,
+            actTime: actElapsed,
+            responseTime: responseElapsed
+          });
+
+          // Resolve finish reason and usage for controller
+          resolveFinishReason(finishReason ?? 'stop');
+          resolveUsage(undefined); // Plan-act doesn't expose usage yet
+
         } catch (error) {
-          finishController.resolveDefault();
+          logger.error('Stream: Fatal error in response phase', error instanceof Error ? error : { error });
+          resolveFinishReason('error' as FinishReason);
+          resolveUsage(undefined);
           throw error;
-        } finally {
-          await finishWatcher.catch(() => undefined);
-          finishController.resolveDefault();
         }
-      }
+      })();
 
       return {
-        textStream: textStream(),
-        finishReason: finishController.promise
+        reasoningStream: includeReasoning ? reasoningStream : (async function* () {})(),
+        textStream,
+        finishReason: finishReasonPromise,
+        usage: usagePromise
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any as StreamTextResult<ToolSet, unknown>;
+      } as any as StreamTextResult<ToolSet, unknown> & { reasoningStream: AsyncIterableIterator<string> };
     }
   };
+
+  return adapter;
 }
 
-function createFinishReasonTracker() {
-  let isResolved = false;
-  let resolver: (value: FinishReason | undefined) => void = () => {};
-
-  const promise = new Promise<FinishReason | undefined>((resolve) => {
-    resolver = (value) => {
-      if (isResolved) {
-        return;
-      }
-      isResolved = true;
-      resolve(value);
-    };
-  });
-
-  return {
-    promise,
-    resolve(value: FinishReason | undefined) {
-      resolver(value);
-    },
-    resolveDefault() {
-      resolver('stop');
-    }
-  };
-}
+// Removed: toLanguageModelUsage - no longer used in streaming path

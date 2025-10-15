@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { createCompletionAgent } from '@packages/agents';
-import { getActiveTools } from '@packages/tools';
 
 import { AuthGuard } from '../guards/auth.guard';
 import { LoggingInterceptor } from '../interceptors/logging.interceptor';
@@ -19,8 +18,9 @@ import { HealthController } from './health/health.controller';
       useFactory: () =>
         createCompletionAgent({
           defaultAgent: 'plan-act',
-          chat: { tools: getActiveTools() },
-          planAct: { plan: { tools: getActiveTools() }, act: { tools: getActiveTools() } }
+          // Tools are now handled dynamically per-request in the adapter
+          chat: {},
+          planAct: {}
         })
     },
     {

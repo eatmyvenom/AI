@@ -191,8 +191,68 @@ Run a Plan‑Act script:
 pnpm ts-node scripts/plan-act-demo.ts
 ```
 
+## Tool Calling
+
+The API supports OpenAI-compatible tool calling with both built-in server-side tools and client-provided tools.
+
+### Built-in Tools
+
+Available built-in tools (execute on server):
+- `calculator`: Evaluate mathematical expressions
+- `getCurrentTime`: Get current date/time in various formats
+- `generateUUID`: Generate unique identifiers
+
+Control which tools are enabled:
+```bash
+curl -sS http://localhost:3000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer test-token' \
+  -d '{
+        "model": "openai:gpt-4o-mini",
+        "enabled_builtin_tools": ["calculator"],
+        "messages": [{ "role": "user", "content": "Calculate 100 / 5" }]
+      }'
+```
+
+### Client-Provided Tools
+
+Define custom tools that execute on the client:
+```bash
+curl -sS http://localhost:3000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer test-token' \
+  -d '{
+        "model": "openai:gpt-4o-mini",
+        "messages": [{ "role": "user", "content": "What is the weather?" }],
+        "tools": [{
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "description": "Get current weather",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "location": {"type": "string"}
+              },
+              "required": ["location"]
+            }
+          }
+        }]
+      }'
+```
+
+### Tool Choice
+
+Control tool usage with `tool_choice`:
+- `"auto"` (default): Model decides
+- `"none"`: No tools
+- `"required"`: Must use tools
+- `{"type": "function", "function": {"name": "tool_name"}}`: Force specific tool
+
+For complete documentation on tool calling, see [TOOL_CALLING.md](TOOL_CALLING.md:1).
+
 ## Extending
-- Tools: add AI SDK tools in `packages/tools/src/index.ts:1` and pass them to `plan.tools`/`act.tools` when constructing `PlanActAgent`.
+- Tools: add built-in AI SDK tools in `packages/tools/src/index.ts:1`. They will be available to all agents automatically.
 - Behavior: tweak planning/action step budgets and instructions in `plan-act.agent.ts`.
 - API: to expose Plan‑Act via HTTP, create a new controller/service that wraps `PlanActAgent` or add an adapter that implements the `ChatAgent` interface if you want it behind `/v1/chat/completions`.
 

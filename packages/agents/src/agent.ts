@@ -8,10 +8,75 @@ import { createProvider, resolveModel, type ProviderConfig } from './provider';
 
 const MessageRoleSchema = z.enum(['system', 'user', 'assistant', 'tool']);
 
-const MessageSchema = z.object({
-  role: MessageRoleSchema,
-  content: z.string().min(1, 'Message content cannot be empty')
+// Tool call schema (for assistant messages)
+const ToolCallSchema = z.object({
+  id: z.string(),
+  type: z.literal('function'),
+  function: z.object({
+    name: z.string(),
+    arguments: z.string() // JSON string
+  })
 });
+
+// Base message schema
+const BaseMessageSchema = z.object({
+  role: MessageRoleSchema,
+  content: z.string().nullable().optional()
+});
+
+// Extended message schema that handles tool_calls and tool_call_id
+const MessageSchema = z.union([
+  // Regular message
+  BaseMessageSchema.extend({
+    role: z.enum(['system', 'user']),
+    content: z.string().min(1, 'Message content cannot be empty')
+  }),
+  // Assistant message (may have tool_calls)
+  BaseMessageSchema.extend({
+    role: z.literal('assistant'),
+    content: z.string().nullable().optional(),
+    tool_calls: z.array(ToolCallSchema).optional()
+  }),
+  // Tool result message
+  BaseMessageSchema.extend({
+    role: z.literal('tool'),
+    content: z.string(),
+    tool_call_id: z.string()
+  })
+]);
+
+// OpenAI tool schema
+const OpenAIFunctionParametersSchema = z.object({
+  type: z.literal('object'),
+  properties: z.record(z.string(), z.any()).optional(),
+  required: z.array(z.string()).optional(),
+  additionalProperties: z.boolean().optional()
+});
+
+const OpenAIFunctionSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  parameters: OpenAIFunctionParametersSchema,
+  strict: z.boolean().optional()
+});
+
+const OpenAIToolSchema = z.object({
+  type: z.literal('function'),
+  function: OpenAIFunctionSchema
+});
+
+// Tool choice schema
+const OpenAIToolChoiceSchema = z.union([
+  z.literal('auto'),
+  z.literal('none'),
+  z.literal('required'),
+  z.object({
+    type: z.literal('function'),
+    function: z.object({
+      name: z.string()
+    })
+  })
+]);
 
 export const ChatCompletionSchema = z.object({
   model: z.string().optional(),
@@ -19,6 +84,12 @@ export const ChatCompletionSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   stream: z.boolean().optional(),
   reasoning_effort: z.string().optional(),
+  // Tool calling parameters
+  tools: z.array(OpenAIToolSchema).optional(),
+  tool_choice: OpenAIToolChoiceSchema.optional(),
+  parallel_tool_calls: z.boolean().optional(),
+  // Built-in tool configuration
+  enabled_builtin_tools: z.array(z.string()).optional(),
   // Optional agent selector; defaults handled by API wiring
   agent: z.enum(['plan-act', 'chat']).optional()
 });

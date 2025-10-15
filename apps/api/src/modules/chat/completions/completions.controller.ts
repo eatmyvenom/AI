@@ -3,10 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { Body, Controller, Inject, InternalServerErrorException, Post, Res } from '@nestjs/common';
 import type { AgentRunResult, ChatAgent, ChatCompletionInput, ReasoningDetail } from '@packages/agents';
 import { ChatCompletionSchema, resolveLanguageModel } from '@packages/agents';
+import { createLogger } from '@packages/logger';
 import type { FinishReason, LanguageModelUsage } from 'ai';
 import { ZodValidationPipe } from 'nestjs-zod';
 
 import { CHAT_AGENT_TOKEN } from '../chat.constants';
+
+const logger = createLogger('api:completions');
 
 type OpenAIChoice = {
   index: number;
@@ -50,7 +53,7 @@ export class CompletionsController {
         throw new InternalServerErrorException('HTTP adapter does not support streaming responses');
       }
 
-      handleStreamingResponse(res, this.agent, normalizedPayload);
+      await handleStreamingResponse(res, this.agent, normalizedPayload);
       return;
     }
 
@@ -137,7 +140,7 @@ function isSseResponseLike(value: unknown): value is SseResponseLike {
   );
 }
 
-function handleStreamingResponse(res: SseResponseLike, agent: ChatAgent, payload: ChatCompletionInput): void {
+async function handleStreamingResponse(res: SseResponseLike, agent: ChatAgent, payload: ChatCompletionInput): Promise<void> {
   // Display the actual model id chosen by the current agent selection
   const model = (() => {
     const requested = payload.agent;
@@ -166,11 +169,49 @@ function handleStreamingResponse(res: SseResponseLike, agent: ChatAgent, payload
 
   writeSseEvent(res, initialChunk(context));
 
-  void (async () => {
+  const heartbeat = setHeartbeat(res, 2000); // 2s heartbeat for faster feedback
+
+  let contentReceived = false;
+  const contentTimeout = setTimeout(() => {
+    if (!contentReceived) {
+      logger.warn('No content received after 10 seconds', { id: context.id, model: context.model });
+    }
+  }, 10000);
+
+  try {
     try {
+      // Stream reasoning content first (if present)
+      const streamWithReasoning = stream as typeof stream & { reasoningStream?: AsyncIterableIterator<string> };
+      if (streamWithReasoning.reasoningStream) {
+        for await (const delta of streamWithReasoning.reasoningStream) {
+          if (typeof delta !== 'string' || delta.length === 0) {
+            continue;
+          }
+
+          if (!contentReceived) {
+            contentReceived = true;
+            clearTimeout(contentTimeout);
+          }
+
+          writeSseEvent(
+            res,
+            chunkEvent(context, {
+              delta: { reasoning_content: delta },
+              finish_reason: null
+            })
+          );
+        }
+      }
+
+      // Stream final answer content
       for await (const delta of stream.textStream) {
-        if (delta.length === 0) {
+        if (typeof delta !== 'string' || delta.length === 0) {
           continue;
+        }
+
+        if (!contentReceived) {
+          contentReceived = true;
+          clearTimeout(contentTimeout);
         }
 
         writeSseEvent(
@@ -196,7 +237,8 @@ function handleStreamingResponse(res: SseResponseLike, agent: ChatAgent, payload
           usage ? mapUsageToOpenAI(usage) : undefined
         )
       );
-    } catch {
+    } catch (error) {
+      logger.error('Streaming error', error instanceof Error ? error : { error });
       writeSseEvent(
         res,
         chunkEvent(context, {
@@ -204,12 +246,12 @@ function handleStreamingResponse(res: SseResponseLike, agent: ChatAgent, payload
           finish_reason: 'error'
         })
       );
-    } finally {
-      closeStream(res);
     }
-  })().catch(() => {
+  } finally {
+    clearTimeout(contentTimeout);
+    clearHeartbeat(heartbeat);
     closeStream(res);
-  });
+  }
 }
 
 function setSseHeaders(res: SseResponseLike): void {
@@ -237,6 +279,33 @@ function closeStream(res: SseResponseLike): void {
 
   res.write('data: [DONE]\n\n');
   res.end();
+}
+
+function setHeartbeat(res: SseResponseLike, intervalMs = 5000): NodeJS.Timeout | undefined {
+  if (intervalMs <= 0) {
+    return undefined;
+  }
+
+  const timer = setInterval(() => {
+    if (res.writableEnded) {
+      return;
+    }
+
+    try {
+      res.write(': heartbeat\n\n');
+    } catch {
+      // Ignore heartbeat write errors; stream teardown handles cleanup.
+    }
+  }, intervalMs);
+
+  timer.unref?.();
+  return timer;
+}
+
+function clearHeartbeat(timer: NodeJS.Timeout | undefined) {
+  if (timer) {
+    clearInterval(timer);
+  }
 }
 
 function chunkEvent(
