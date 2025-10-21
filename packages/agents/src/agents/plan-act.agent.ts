@@ -238,8 +238,11 @@ The context from planning and actions is provided below. Use it to inform your r
             experimental_output: Output.object({schema: PlanSchema}),
         });
 
+        // Filter out system messages from input since the agent already has a system message
+        const filteredInput = input.filter(msg => msg.role !== 'system');
+
         return planAgent.stream({
-            prompt: [...input],
+            prompt: [...filteredInput],
         });
     }
 
@@ -248,8 +251,11 @@ The context from planning and actions is provided below. Use it to inform your r
         input: ModelMessage[], planStep: z.infer<typeof PlanSchema>['steps'][number],
         previousActions?: z.infer<typeof actStepSchema>[]
     ) {
+        // Filter out system messages from input since the agent already has a system message
+        const filteredInput = input.filter(msg => msg.role !== 'system');
+
         return agent.stream({
-            prompt: [...input, ...PlanActAgent.actStepsToMessage(previousActions || []), PlanActAgent.planStepToMessage(planStep)],
+            prompt: [...filteredInput, ...PlanActAgent.actStepsToMessage(previousActions || []), PlanActAgent.planStepToMessage(planStep)],
         });
     }
 
@@ -345,7 +351,7 @@ The context from planning and actions is provided below. Use it to inform your r
 
     static planStepToMessage(step: z.infer<typeof PlanSchema>['steps'][number]): ModelMessage {
         return {
-            role: 'system',
+            role: 'user',
             content: `Plan Step: ${step.title}\nInstructions: ${step.instructions}\nRelevant Context: ${step.relevantContext}`
         };
     }
@@ -369,41 +375,47 @@ The context from planning and actions is provided below. Use it to inform your r
         plan: z.infer<typeof PlanSchema>,
         actions: z.infer<typeof actStepSchema>[]
     ) {
+        // Build a single consolidated system message with all context
+        const contextParts: string[] = [this.responseInstructions];
+
+        if (plan?.steps?.length || actions?.length) {
+            contextParts.push('\nContext from prior planning and actions is provided below. Use it to craft the final response.\n');
+        }
+
+        if (plan?.steps?.length) {
+            contextParts.push('Plan Steps:');
+            plan.steps.forEach((step, idx) => {
+                contextParts.push(`${idx + 1}. ${step.title}`);
+                contextParts.push(`   Instructions: ${step.instructions}`);
+                contextParts.push(`   Relevant Context: ${step.relevantContext}`);
+            });
+        }
+
+        if (actions?.length) {
+            contextParts.push('\nActions Taken:');
+            actions.forEach((action, idx) => {
+                contextParts.push(`${idx + 1}. Action: ${action.action}`);
+                contextParts.push(`   Observations: ${action.observation}`);
+            });
+        }
+
+        contextParts.push('\nProvide the final assistant answer to the user based on the conversation and the above plan and actions. Do not call additional tools.');
+
+        const consolidatedSystemMessage = contextParts.join('\n');
+
         const responseAgent = new Agent({
             model: this.model,
-            system: this.responseInstructions,
+            system: consolidatedSystemMessage,
             stopWhen: stepCountIs(1),
         });
 
-        const planMessages = plan?.steps?.length
-            ? plan.steps.map((step) => PlanActAgent.planStepToMessage(step))
-            : [];
-        const actionMessages = actions?.length
-            ? PlanActAgent.actStepsToMessage(actions)
-            : [];
-
-        const contextPrelude: ModelMessage | undefined =
-            planMessages.length || actionMessages.length
-                ? {
-                      role: 'system',
-                      content: 'Context from prior planning and actions is provided below. Use it to craft the final response.',
-                  }
-                : undefined;
-
-        const finalInstruction: ModelMessage = {
-            role: 'system',
-            content:
-                'Provide the final assistant answer to the user based on the conversation and the above plan and actions. Do not call additional tools.',
-        };
+        // Filter out system messages from input since the agent already has a system message
+        const filteredInput = input.slice(-1).filter(msg => msg.role !== 'system');
 
         return responseAgent.stream({
             prompt: [
                 // save context by not including the full conversation history
-                ...input.slice(-1),
-                ...(contextPrelude ? [contextPrelude] : []),
-                ...planMessages,
-                ...actionMessages,
-                finalInstruction,
+                ...filteredInput,
             ],
         });
     }

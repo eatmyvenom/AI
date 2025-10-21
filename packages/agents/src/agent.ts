@@ -5,6 +5,7 @@ import { streamText, type ToolSet, type StepResult, type LanguageModelUsage, typ
 import { z } from 'zod';
 
 import { createProvider, resolveModel, type ProviderConfig } from './provider';
+import { extractToolCallsFromSteps } from './tools/converter';
 
 const MessageRoleSchema = z.enum(['system', 'user', 'assistant', 'tool']);
 
@@ -48,7 +49,7 @@ const MessageSchema = z.union([
 // OpenAI tool schema
 const OpenAIFunctionParametersSchema = z.object({
   type: z.literal('object'),
-  properties: z.record(z.string(), z.any()).optional(),
+  properties: z.record(z.string(), z.unknown()).optional(),
   required: z.array(z.string()).optional(),
   additionalProperties: z.boolean().optional()
 });
@@ -127,6 +128,14 @@ export interface AgentRunResult {
   usage?: AgentUsage;
   steps: Array<StepResult<ToolSet>>;
   reasoningDetails?: ReasoningDetail[];
+  toolCalls?: Array<{
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
 }
 
 export interface AgentConfig {
@@ -166,6 +175,9 @@ export function createChatAgent(config: AgentConfig = {}): ChatAgent {
         result.steps.catch(() => [])
       ]);
 
+      // Extract tool calls from steps
+      const toolCalls = extractToolCallsFromSteps(steps);
+
       return {
         id: randomUUID(),
         created: Math.floor(Date.now() / 1000),
@@ -173,7 +185,8 @@ export function createChatAgent(config: AgentConfig = {}): ChatAgent {
         text,
         finishReason,
         usage: coerceUsage(totalUsage ?? usage),
-        steps
+        steps,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined
       };
     },
 

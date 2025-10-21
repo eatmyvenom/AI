@@ -1,7 +1,23 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 let envLoaded = false;
+
+function findMonorepoRoot(startPath: string): string {
+  let currentPath = startPath;
+
+  while (currentPath !== dirname(currentPath)) {
+    // Check for pnpm-workspace.yaml or turbo.json as monorepo indicators
+    if (existsSync(resolve(currentPath, 'pnpm-workspace.yaml')) ||
+        existsSync(resolve(currentPath, 'turbo.json'))) {
+      return currentPath;
+    }
+    currentPath = dirname(currentPath);
+  }
+
+  // Fallback to original path if no monorepo root found
+  return startPath;
+}
 
 function parseLine(line: string) {
   const separatorIndex = line.indexOf('=');
@@ -35,7 +51,9 @@ export function ensureEnv() {
     return;
   }
 
-  const envPath = resolve(process.cwd(), process.env.ENV_FILE ?? '.env');
+  // Find monorepo root to load .env from there
+  const monorepoRoot = findMonorepoRoot(process.cwd());
+  const envPath = resolve(monorepoRoot, process.env.ENV_FILE ?? '.env');
 
   if (!existsSync(envPath)) {
     envLoaded = true;

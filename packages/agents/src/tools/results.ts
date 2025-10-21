@@ -5,15 +5,40 @@
  */
 
 import { createLogger } from '@packages/logger';
+
 import type { ToolCall, ToolResultMessage } from './types';
 
 const logger = createLogger('agents:tool-results');
 
 /**
+ * Type guard to check if a message is an assistant message with proper structure
+ */
+function isAssistantMessage(message: unknown): message is { role: 'assistant'; tool_calls?: ToolCall[] } {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    'role' in message &&
+    (message as Record<string, unknown>).role === 'assistant'
+  );
+}
+
+/**
+ * Type guard to check if a message is a tool message with proper structure
+ */
+function isToolMessage(message: unknown): message is { role: 'tool'; content: string; tool_call_id: string } {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    'role' in message &&
+    (message as Record<string, unknown>).role === 'tool'
+  );
+}
+
+/**
  * Extract tool calls from an assistant message
  */
-export function extractToolCallsFromMessage(message: any): ToolCall[] {
-  if (!message || message.role !== 'assistant') {
+export function extractToolCallsFromMessage(message: unknown): ToolCall[] {
+  if (!isAssistantMessage(message)) {
     return [];
   }
 
@@ -43,11 +68,11 @@ export function extractToolCallsFromMessage(message: any): ToolCall[] {
 /**
  * Extract tool result messages from conversation history
  */
-export function extractToolResults(messages: any[]): ToolResultMessage[] {
+export function extractToolResults(messages: unknown[]): ToolResultMessage[] {
   const results: ToolResultMessage[] = [];
 
   for (const message of messages) {
-    if (message.role === 'tool') {
+    if (isToolMessage(message)) {
       results.push({
         role: 'tool',
         content: message.content,
@@ -101,10 +126,10 @@ export function getMissingResults(matched: ToolCallWithResult[]): ToolCall[] {
 /**
  * Validate that tool result content is valid JSON or string
  */
-export function validateToolResultContent(content: string): { valid: boolean; parsed?: any; error?: string } {
+export function validateToolResultContent(content: string): { valid: boolean; parsed?: unknown; error?: string } {
   try {
     // Try parsing as JSON first
-    const parsed = JSON.parse(content);
+    const parsed: unknown = JSON.parse(content);
     return { valid: true, parsed };
   } catch {
     // If not JSON, treat as plain string
@@ -119,10 +144,10 @@ export function validateToolResultContent(content: string): { valid: boolean; pa
 /**
  * Check if a conversation contains any tool-related messages
  */
-export function conversationHasToolMessages(messages: any[]): boolean {
+export function conversationHasToolMessages(messages: unknown[]): boolean {
   return messages.some((msg) => {
-    if (msg.role === 'tool') return true;
-    if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) return true;
+    if (isToolMessage(msg)) return true;
+    if (isAssistantMessage(msg) && msg.tool_calls && msg.tool_calls.length > 0) return true;
     return false;
   });
 }
@@ -130,12 +155,12 @@ export function conversationHasToolMessages(messages: any[]): boolean {
 /**
  * Find the last assistant message with tool calls that need results
  */
-export function findPendingToolCalls(messages: any[]): ToolCall[] {
+export function findPendingToolCalls(messages: unknown[]): ToolCall[] {
   // Go through messages in reverse to find the most recent assistant message with tool calls
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
 
-    if (message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0) {
+    if (isAssistantMessage(message) && message.tool_calls && message.tool_calls.length > 0) {
       const toolCalls = extractToolCallsFromMessage(message);
 
       // Check if we have results for these tool calls in subsequent messages

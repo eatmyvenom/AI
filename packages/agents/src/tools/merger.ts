@@ -5,11 +5,14 @@
  * tool_choice preferences and handling name conflicts.
  */
 
-import type { ToolSet } from 'ai';
+
 import { createLogger } from '@packages/logger';
 import { getActiveTools } from '@packages/tools';
+import type { ToolSet } from 'ai';
+
 import { convertOpenAITools } from './converter';
 import type { OpenAITool, OpenAIToolChoice, ConvertedTool, ToolMetadata } from './types';
+import { ToolExecutionMode } from './types';
 
 const logger = createLogger('agents:tool-merger');
 
@@ -110,6 +113,7 @@ export function mergeTools(options: MergeToolsOptions): MergedTools {
       continue;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     result.toolSet[converted.name] = converted.tool;
     result.metadata.set(converted.name, converted.metadata);
     result.clientToolNames.push(converted.name);
@@ -132,7 +136,7 @@ export function mergeTools(options: MergeToolsOptions): MergedTools {
     result.toolSet[toolName] = tool;
     result.metadata.set(toolName, {
       name: toolName,
-      executionMode: 'server' as any,
+      executionMode: ToolExecutionMode.SERVER,
     });
     result.builtinToolNames.push(toolName);
 

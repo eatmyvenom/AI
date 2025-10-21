@@ -4,10 +4,11 @@
  * Converts OpenAI tool definitions to AI SDK tool definitions with proper execution modes.
  */
 
-import { tool, dynamicTool } from 'ai';
 import { createLogger } from '@packages/logger';
+import { tool, dynamicTool } from 'ai';
+
 import { convertFunctionParametersToZod, validateJsonSchema } from './schema-converter';
-import type { OpenAITool, ToolExecutionMode, ConvertedTool, ToolMetadata } from './types';
+import type { OpenAITool, ConvertedTool, ToolMetadata, ToolCall } from './types';
 import { ToolExecutionMode as ExecutionMode } from './types';
 
 const logger = createLogger('agents:tool-converter');
@@ -61,7 +62,7 @@ export function convertClientTool(openAITool: OpenAITool): ConvertedTool {
   const convertedTool = dynamicTool({
     description: func.description || `Client-side tool: ${func.name}`,
     inputSchema,
-    execute: async (input, { toolCallId }) => {
+    execute: (_input, { toolCallId }) => {
       // This should never be called in normal flow - the tool call should be
       // intercepted before execution and sent to client
       logger.error('Client tool execute called - this should not happen', {
@@ -76,8 +77,7 @@ export function convertClientTool(openAITool: OpenAITool): ConvertedTool {
 
   return {
     name: func.name,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tool: convertedTool as any,
+    tool: convertedTool,
     metadata,
   };
 }
@@ -169,4 +169,54 @@ export function convertOpenAITools(openAITools: OpenAITool[]): ConvertedTool[] {
  */
 export function requiresClientExecution(metadata: ToolMetadata): boolean {
   return metadata.executionMode === ExecutionMode.CLIENT;
+}
+
+/**
+ * Convert AI SDK tool call to OpenAI format
+ *
+ * AI SDK format: { type: 'tool-call', toolCallId: 'x', toolName: 'calc', input: {...} }
+ * OpenAI format: { id: 'x', type: 'function', function: { name: 'calc', arguments: '{...}' }}
+ */
+export function convertAISDKToolCallToOpenAI(toolCall: {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+}): ToolCall {
+  return {
+    id: toolCall.toolCallId,
+    type: 'function',
+    function: {
+      name: toolCall.toolName,
+      arguments: JSON.stringify(toolCall.input),
+    },
+  };
+}
+
+/**
+ * Extract tool calls from AI SDK StepResult array and convert to OpenAI format
+ *
+ * @param steps - Array of StepResult from AI SDK
+ * @returns Array of OpenAI-format tool calls
+ */
+export function extractToolCallsFromSteps(steps: Array<{ toolCalls?: Array<{
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+}> }>): ToolCall[] {
+  const toolCalls: ToolCall[] = [];
+
+  for (const step of steps) {
+    if (step.toolCalls && step.toolCalls.length > 0) {
+      for (const toolCall of step.toolCalls) {
+        toolCalls.push(convertAISDKToolCallToOpenAI(toolCall));
+      }
+    }
+  }
+
+  logger.debug('Extracted tool calls from steps', {
+    stepCount: steps.length,
+    toolCallCount: toolCalls.length,
+  });
+
+  return toolCalls;
 }

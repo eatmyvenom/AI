@@ -61,8 +61,12 @@ export const getCurrentTime = tool({
   execute: async ({ timezone, format = 'all' }) => {
     const now = new Date();
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result: Record<string, any> = {};
+    const result: {
+      iso?: string;
+      unix?: number;
+      human?: string;
+      timezone?: string;
+    } = {};
 
     if (format === 'iso' || format === 'all') {
       result.iso = now.toISOString();

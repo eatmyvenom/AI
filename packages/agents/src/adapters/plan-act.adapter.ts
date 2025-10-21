@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '@packages/logger';
-import type { ModelMessage, FinishReason, ToolSet, StreamTextResult, LanguageModelUsage } from 'ai';
+import type { ModelMessage, FinishReason, ToolSet, StreamTextResult, LanguageModelUsage, StepResult } from 'ai';
 import type { z } from 'zod';
 
 import type { ChatAgent, ChatCompletionInput, AgentRunResult, ReasoningDetail } from '../agent';
 import { PlanActAgent, PlanSchema, actStepSchema } from '../agents';
-import { mergeTools } from '../tools';
+import { mergeTools, extractToolCallsFromSteps } from '../tools';
+import type { OpenAITool, OpenAIToolChoice } from '../tools/types';
 
 const logger = createLogger('agents:plan-act-adapter');
 
@@ -111,10 +112,10 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
 
         // Merge client-provided tools with built-in tools
         const mergedTools = mergeTools({
-          clientTools: input.tools as unknown as any[], // eslint-disable-line @typescript-eslint/no-explicit-any
-          enabledBuiltinTools: input.enabled_builtin_tools as string[] | undefined,
-          toolChoice: input.tool_choice as unknown as any, // eslint-disable-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
-          parallelToolCalls: input.parallel_tool_calls as boolean | undefined,
+          clientTools: (input.tools as OpenAITool[] | undefined) ?? [],
+          enabledBuiltinTools: input.enabled_builtin_tools,
+          toolChoice: input.tool_choice as OpenAIToolChoice | undefined,
+          parallelToolCalls: input.parallel_tool_calls,
         });
 
         logger.info('Tools merged for plan-act agent', {
@@ -178,19 +179,25 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
         const actions = (actStream as { collectedActions?: z.infer<typeof actStepSchema>[] }).collectedActions ?? [];
         logger.info('Act phase completed', { actionCount: actions.length, totalChunks: chunkCount });
 
-        // Phase 3: final response — collect text and finishReason
+        // Phase 3: final response — collect text, finishReason, and steps
         logger.debug('Starting Response phase');
         const responseStream = agent.runResponsePhase(messages, plan, actions);
-        const [text, finishReason] = await Promise.all([
+        const [text, finishReason, steps]: [string, FinishReason | undefined, Array<StepResult<ToolSet>>] = await Promise.all([
           responseStream.text.catch((err: unknown) => { logger.error('Error getting response text', err instanceof Error ? err : { error: err }); return ''; }),
           responseStream.finishReason.catch((err: unknown) => { logger.error('Error getting finish reason', err instanceof Error ? err : { error: err }); return undefined as FinishReason | undefined; }),
+          responseStream.steps.catch((err: unknown) => { logger.error('Error getting steps', err instanceof Error ? err : { error: err }); return [] as Array<StepResult<ToolSet>>; }),
         ]);
+
+        // Extract tool calls from steps
+        const toolCalls = extractToolCallsFromSteps(steps);
+        logger.debug('Extracted tool calls', { count: toolCalls.length });
+
         const includeThinkingBlock = typeof input.reasoning_effort !== 'undefined';
         const thinkingBlock = includeThinkingBlock ? formatThinkingBlock(plan, actions) : undefined;
         const responseText = includeThinkingBlock
           ? [thinkingBlock, text].filter((section): section is string => Boolean(section && section.length > 0)).join('\n\n')
           : text;
-        logger.info('Response phase completed', { textLength: responseText.length, finishReason, includeThinkingBlock });
+        logger.info('Response phase completed', { textLength: responseText.length, finishReason, includeThinkingBlock, toolCallCount: toolCalls.length });
 
         // Format reasoning details from raw model outputs
         const reasoningDetails = formatReasoningDetails(plan, actions);
@@ -203,10 +210,11 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
           text: responseText,
           finishReason,
           usage: undefined,
-          steps: [],
-          reasoningDetails
+          steps,
+          reasoningDetails,
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined
         };
-        logger.info('PlanActAdapter.run completed successfully', { resultId: result.id, textLength: responseText.length, reasoningCount: reasoningDetails.length });
+        logger.info('PlanActAdapter.run completed successfully', { resultId: result.id, textLength: responseText.length, reasoningCount: reasoningDetails.length, toolCallCount: toolCalls.length });
         return result;
       } catch (error) {
         logger.error('PlanActAdapter.run failed', error instanceof Error ? error : { error });
@@ -256,10 +264,10 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
 
           // Merge client-provided tools with built-in tools
           const mergedTools = mergeTools({
-            clientTools: input.tools as unknown as any[], // eslint-disable-line @typescript-eslint/no-explicit-any
-            enabledBuiltinTools: input.enabled_builtin_tools as string[] | undefined,
-            toolChoice: input.tool_choice as unknown as any, // eslint-disable-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
-            parallelToolCalls: input.parallel_tool_calls as boolean | undefined,
+            clientTools: (input.tools as OpenAITool[] | undefined) ?? [],
+            enabledBuiltinTools: input.enabled_builtin_tools,
+            toolChoice: input.tool_choice as OpenAIToolChoice | undefined,
+            parallelToolCalls: input.parallel_tool_calls,
           });
 
           logger.info('Stream: Tools merged for plan-act agent', {

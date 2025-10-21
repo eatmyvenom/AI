@@ -7,8 +7,8 @@ import { LoggingInterceptor } from '../interceptors/logging.interceptor';
 
 import { CHAT_AGENT_TOKEN } from './chat/chat.constants';
 import { CompletionsController } from './chat/completions/completions.controller';
-import { ModelController } from './models/model.controller';
 import { HealthController } from './health/health.controller';
+import { ModelController } from './models/model.controller';
 
 @Module({
   controllers: [CompletionsController, ModelController, HealthController],

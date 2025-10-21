@@ -11,12 +11,22 @@ import { CHAT_AGENT_TOKEN } from '../chat.constants';
 
 const logger = createLogger('api:completions');
 
+type OpenAIToolCall = {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
 type OpenAIChoice = {
   index: number;
   message: {
     role: 'assistant';
     content: string;
     reasoning_details?: ReasoningDetail[];
+    tool_calls?: OpenAIToolCall[];
   };
   finish_reason: string | null;
 };
@@ -76,7 +86,12 @@ function normalizeAgentSelection(input: ChatCompletionInput): ChatCompletionInpu
 }
 
 function mapAgentResultToOpenAIResponse(result: AgentRunResult): OpenAIChatCompletion {
-  const finishReason = result.finishReason ?? 'stop';
+  // Extract tool calls safely with proper type narrowing
+  const toolCalls: OpenAIToolCall[] | undefined = result.toolCalls as OpenAIToolCall[] | undefined;
+  const hasToolCalls = Boolean(toolCalls && toolCalls.length > 0);
+
+  // If there are tool calls, set finish_reason to 'tool_calls', otherwise use the result's finish reason
+  const finishReason = hasToolCalls ? 'tool_calls' : (result.finishReason ?? 'stop');
 
   return {
     id: `chatcmpl_${result.id}`,
@@ -92,6 +107,10 @@ function mapAgentResultToOpenAIResponse(result: AgentRunResult): OpenAIChatCompl
           // Include raw reasoning details if available
           ...(result.reasoningDetails && result.reasoningDetails.length > 0
             ? { reasoning_details: result.reasoningDetails }
+            : {}),
+          // Include tool calls if present
+          ...(hasToolCalls
+            ? { tool_calls: toolCalls }
             : {})
         },
         finish_reason: finishReason

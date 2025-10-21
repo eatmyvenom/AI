@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+
 import type { JSONSchemaProperty, OpenAIFunctionParameters } from './types';
 
 /**

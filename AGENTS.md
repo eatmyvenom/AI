@@ -58,3 +58,6 @@ It returns objects with `id`, `created`, `model`, `text`, `finishReason`, option
 4. **Logging & telemetry** — reuse `packages/logger` or plug in distributed tracing as needed.
 
 Keep this file updated when adding new agents, tools, or endpoints so automation and LLMs can rely on current context.
+
+User notes:
+- When testing don't overwrite the model being used unless it is a recent or new model that is low cost such as gpt-5-mini, kimi k2, claude-haiku-4-5, grok-code-fast-1, grok-4-fast-reasoning, grok-4-fast-non-reasoning. This is to avoid getting upcharged for lower quality legacy models. I prefer the model I have specified in the .env the most.

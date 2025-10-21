@@ -4,8 +4,6 @@
  * This file defines types for OpenAI-compatible tool calling and our internal tool system.
  */
 
-import type { z } from 'zod';
-
 /**
  * OpenAI Function Parameter JSON Schema
  */
@@ -109,6 +107,50 @@ export interface ToolMetadata {
 export interface ConvertedTool {
   name: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  tool: any; // AI SDK Tool type - using any to avoid circular dependency issues
+  tool: any; // AI SDK Tool type - using any to avoid circular dependency with 'ai' package
   metadata: ToolMetadata;
 }
+
+/**
+ * Base message type for all conversation messages
+ */
+export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
+
+/**
+ * System message
+ */
+export interface SystemMessage {
+  role: 'system';
+  content: string;
+}
+
+/**
+ * User message
+ */
+export interface UserMessage {
+  role: 'user';
+  content: string;
+}
+
+/**
+ * Assistant message (may include tool calls)
+ */
+export interface AssistantMessage {
+  role: 'assistant';
+  content: string | null;
+  tool_calls?: ToolCall[];
+}
+
+/**
+ * Tool result message
+ */
+export interface ToolMessage {
+  role: 'tool';
+  content: string;
+  tool_call_id: string;
+}
+
+/**
+ * Union type for all message types
+ */
+export type ConversationMessage = SystemMessage | UserMessage | AssistantMessage | ToolMessage;
