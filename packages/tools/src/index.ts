@@ -4,11 +4,20 @@ import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import { z } from 'zod';
 
+import { getMCPTools } from './mcp-client';
+
 /**
  * Built-in server-side tools
  *
  * These tools execute on the server and can be enabled via API request parameters.
  */
+
+/**
+ * MCP tools cache
+ * Initialized lazily on first access to avoid startup delays
+ */
+let mcpToolsCache: ToolSet | null = null;
+let mcpToolsInitPromise: Promise<ToolSet> | null = null;
 
 /**
  * Calculator tool - evaluates mathematical expressions safely
@@ -141,18 +150,27 @@ export type DefaultToolset = typeof defaultToolset;
 /**
  * Get active tools based on configuration
  *
+ * This is the synchronous version that includes MCP tools if they've been pre-initialized.
+ * For guaranteed MCP tool inclusion, use getActiveToolsAsync instead.
+ *
  * @param enabledTools - Array of tool names to enable. If not provided, all tools are enabled.
+ * @param includeMCP - Whether to include MCP tools from cache (default: true)
  * @returns ToolSet containing only the enabled tools
  */
-export function getActiveTools(enabledTools?: string[]): ToolSet {
+export function getActiveTools(enabledTools?: string[], includeMCP = true): ToolSet {
+  // Merge built-in and cached MCP tools
+  const allTools: ToolSet = includeMCP
+    ? { ...defaultToolset, ...getMCPToolsSync() }
+    : defaultToolset;
+
   if (!enabledTools || enabledTools.length === 0) {
-    return defaultToolset;
+    return allTools;
   }
 
   const active: ToolSet = {};
   for (const toolName of enabledTools) {
-    if (toolName in defaultToolset) {
-      active[toolName] = defaultToolset[toolName];
+    if (toolName in allTools) {
+      active[toolName] = allTools[toolName];
     }
   }
 
@@ -165,3 +183,89 @@ export function getActiveTools(enabledTools?: string[]): ToolSet {
 export function getAvailableToolNames(): string[] {
   return Object.keys(defaultToolset);
 }
+
+/**
+ * Initialize MCP tools (async)
+ * This should be called once at application startup
+ */
+async function initializeMCPTools(): Promise<ToolSet> {
+  // If already cached, return immediately
+  if (mcpToolsCache !== null) {
+    return mcpToolsCache;
+  }
+
+  // If initialization is in progress, wait for it
+  if (mcpToolsInitPromise !== null) {
+    return mcpToolsInitPromise;
+  }
+
+  // Start initialization
+  mcpToolsInitPromise = getMCPTools();
+
+  try {
+    mcpToolsCache = await mcpToolsInitPromise;
+    return mcpToolsCache;
+  } catch (error) {
+    console.error('[Tools] Failed to initialize MCP tools:', error);
+    // Return empty toolset on error to avoid breaking the app
+    mcpToolsCache = {};
+    return mcpToolsCache;
+  } finally {
+    mcpToolsInitPromise = null;
+  }
+}
+
+/**
+ * Get MCP tools synchronously from cache
+ * Returns empty toolset if MCP tools haven't been initialized yet
+ */
+function getMCPToolsSync(): ToolSet {
+  return mcpToolsCache || {};
+}
+
+/**
+ * Get active tools including MCP tools (async version)
+ * This includes both built-in and MCP tools
+ *
+ * @param enabledTools - Array of tool names to enable. If not provided, all tools are enabled.
+ * @returns ToolSet containing enabled built-in and MCP tools
+ */
+export async function getActiveToolsAsync(enabledTools?: string[]): Promise<ToolSet> {
+  // Initialize MCP tools
+  const mcpTools = await initializeMCPTools();
+
+  // Merge built-in and MCP tools
+  const allTools: ToolSet = {
+    ...defaultToolset,
+    ...mcpTools,
+  };
+
+  // If no filter is provided, return all tools
+  if (!enabledTools || enabledTools.length === 0) {
+    return allTools;
+  }
+
+  // Filter tools based on enabled list
+  const active: ToolSet = {};
+  for (const toolName of enabledTools) {
+    if (toolName in allTools) {
+      active[toolName] = allTools[toolName];
+    }
+  }
+
+  return active;
+}
+
+/**
+ * Initialize MCP tools in the background
+ * This should be called at application startup to pre-load MCP tools
+ */
+export function initializeMCPToolsInBackground(): void {
+  // Start initialization but don't wait for it
+  initializeMCPTools().catch(error => {
+    console.error('[Tools] Background MCP initialization failed:', error);
+  });
+}
+
+// Re-export MCP client utilities for cleanup
+export { closeMCPClients, mcpClientManager } from './mcp-client';

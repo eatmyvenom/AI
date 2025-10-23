@@ -15,13 +15,16 @@ import { ModelController } from './models/model.controller';
   providers: [
     {
       provide: CHAT_AGENT_TOKEN,
-      useFactory: () =>
-        createCompletionAgent({
+      useFactory: () => {
+        return createCompletionAgent({
           defaultAgent: 'plan-act',
           // Tools are now handled dynamically per-request in the adapter
           chat: {},
-          planAct: {}
-        })
+          planAct: {
+            model: process.env.MODEL
+          }
+        });
+      }
     },
     {
       provide: APP_GUARD,
@@ -34,3 +37,4 @@ import { ModelController } from './models/model.controller';
   ]
 })
 export class AppModule {}
+

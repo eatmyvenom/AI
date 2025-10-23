@@ -4,6 +4,7 @@ import type { LogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ensureEnv } from '@packages/agents';
 import { NestLogger, createLogger } from '@packages/logger';
+import { initializeMCPToolsInBackground, closeMCPClients } from '@packages/tools';
 
 import { OpenAIErrorFilter } from './filters/openai-error.filter';
 import { AppModule } from './modules/app.module';
@@ -73,6 +74,32 @@ async function bootstrap() {
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);
   logger.info(`API listening on http://localhost:${port}`);
+
+  // Initialize MCP tools in background (non-blocking)
+  // This connects to configured MCP servers (e.g., Tavily for web search)
+  logger.info('Initializing MCP tools in background...');
+  initializeMCPToolsInBackground();
+
+  // Enable graceful shutdown
+  app.enableShutdownHooks();
+
+  // Setup cleanup handlers
+  const cleanup = async (signal: string) => {
+    logger.info(`${signal} received, starting graceful shutdown...`);
+    try {
+      await closeMCPClients();
+      logger.info('MCP clients closed successfully');
+    } catch (error) {
+      logger.error('Error closing MCP clients:', error instanceof Error ? error : { error });
+    }
+    await app.close();
+    logger.info('Application shut down complete');
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => void cleanup('SIGTERM'));
+  process.on('SIGINT', () => void cleanup('SIGINT'));
 }
 
 void bootstrap();
+ 

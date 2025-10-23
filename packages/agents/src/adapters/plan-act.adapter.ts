@@ -95,6 +95,7 @@ function formatThinkingBlock(
 }
 
 type PlanActAdapterConfig = {
+  model?: string;
   instructions?: string;
   plan?: { steps?: number; tools?: ToolSet };
   act?: { steps?: number; tools?: ToolSet };
@@ -105,7 +106,7 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
     async run(input: ChatCompletionInput): Promise<AgentRunResult> {
       logger.info('PlanActAdapter.run called', { model: input.model, messageCount: input.messages.length });
 
-      const model = input.model; // allow provider-prefixed ids e.g. "openai:gpt-4o-mini"
+      const model = input.model || config.model; // allow provider-prefixed ids e.g. "openai:gpt-4o-mini"
 
       try {
         logger.debug('Creating PlanActAgent instance', { model, hasInstructions: Boolean(config.instructions) });
@@ -127,8 +128,14 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
         const agent = new PlanActAgent({
           model,
           instructions: config.instructions,
-          plan: { steps: config.plan?.steps, tools: config.plan?.tools ?? mergedTools.toolSet },
-          act: { steps: config.act?.steps, tools: config.act?.tools ?? mergedTools.toolSet }
+          // Plan phase gets empty tools to avoid structured output conflict
+          plan: { steps: config.plan?.steps },
+          // Act phase gets all the tools
+          act: {
+            steps: config.act?.steps,
+            tools: mergedTools.toolSet,
+            mergedTools: mergedTools
+          }
         });
         logger.info('PlanActAgent created successfully', { modelId: agent.modelId });
 
@@ -158,6 +165,16 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
         const plan = latestValidPlan ?? { steps: [] };
 
         logger.info('Plan phase completed', { stepCount: plan.steps?.length ?? 0 });
+
+        // Check if plan generation failed (empty plan may indicate model issues)
+        if ((plan.steps?.length ?? 0) === 0) {
+          logger.warn('Plan phase produced no steps', {
+            toolCountInActPhase: Object.keys(mergedTools.toolSet).length,
+            model: input.model,
+            message: 'Empty plan may indicate model issues - proceeding with act phase anyway'
+          });
+          // Don't throw error - let act phase handle empty plan gracefully
+        }
 
         // Phase 2: act — drain while collecting actions
         logger.debug('Starting Act phase');
@@ -226,7 +243,7 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
       logger.info('PlanActAdapter.stream called', { model: input.model, messageCount: input.messages.length });
       const startTime = Date.now();
 
-      const model = input.model;
+      const model = input.model || config.model;
       const includeReasoning = typeof input.reasoning_effort !== 'undefined';
 
       // Create promises for finish reason, usage, and phase coordination
@@ -279,8 +296,14 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
           const agent = new PlanActAgent({
             model,
             instructions: config.instructions,
-            plan: { steps: config.plan?.steps, tools: config.plan?.tools ?? mergedTools.toolSet },
-            act: { steps: config.act?.steps, tools: config.act?.tools ?? mergedTools.toolSet }
+            // Plan phase gets empty tools to avoid structured output conflict
+            plan: { steps: config.plan?.steps },
+            // Act phase gets all the tools
+            act: {
+              steps: config.act?.steps,
+              tools: mergedTools.toolSet,
+              mergedTools: mergedTools
+            }
           });
           logger.info('Stream: PlanActAgent created', { modelId: agent.modelId, elapsed: Date.now() - startTime });
 
@@ -317,12 +340,22 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
 
           if (planResult === 'timeout') {
             logger.error('Stream: Plan phase timed out', { timeout: planTimeout });
-            throw new Error('Plan phase timed out after 30 seconds');
+            throw new Error(`Plan phase timed out after ${planTimeout / 1000} seconds`);
           }
 
           const plan = latestValidPlan ?? { steps: [] };
           const planElapsed = Date.now() - planStartTime;
           logger.info('Stream: Plan phase completed', { stepCount: plan.steps?.length ?? 0, elapsed: planElapsed });
+
+          // Check if plan generation failed (empty plan may indicate model issues)
+          if ((plan.steps?.length ?? 0) === 0) {
+            logger.warn('Stream: Plan phase produced no steps', {
+              toolCountInActPhase: Object.keys(mergedTools.toolSet).length,
+              model: input.model,
+              message: 'Empty plan may indicate model issues - proceeding with act phase anyway'
+            });
+            // Don't throw error - let act phase handle empty plan gracefully
+          }
 
           // Notify reasoning stream that plan is ready
           resolvePlanComplete(plan);

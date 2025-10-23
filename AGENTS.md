@@ -61,3 +61,4 @@ Keep this file updated when adding new agents, tools, or endpoints so automation
 
 User notes:
 - When testing don't overwrite the model being used unless it is a recent or new model that is low cost such as gpt-5-mini, kimi k2, claude-haiku-4-5, grok-code-fast-1, grok-4-fast-reasoning, grok-4-fast-non-reasoning. This is to avoid getting upcharged for lower quality legacy models. I prefer the model I have specified in the .env the most.
+- Never ever commit changes. Never undo previous commits. Never `git reset`. I will manage the repo myself do not touch any of my git stuff.

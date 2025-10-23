@@ -3,6 +3,8 @@ import { Experimental_Agent as Agent, ModelMessage, Output, stepCountIs, ToolSet
 import { z } from 'zod';
 
 import { resolveLanguageModel } from '../models';
+import type { MergedTools } from '../tools';
+import { ClientExecutionRequiredError } from '../tools/converter';
 
 const logger = createLogger('agents:plan-act');
 
@@ -43,6 +45,7 @@ export interface PlanActAgentConfig {
         steps?: number;
         tools?: ToolSet;
         instructions?: string;  // Act phase-specific instructions
+        mergedTools?: MergedTools;  // Tool metadata for execution detection
     };
     response?: {
         instructions?: string;  // Response phase-specific instructions
@@ -166,11 +169,20 @@ The context from planning and actions is provided below. Use it to inform your r
     private readonly resolvedModelId: string;
 
     constructor(private config: PlanActAgentConfig = {}) {
+        // Warn if plan tools are configured (they shouldn't be used)
+        if (config?.plan?.tools && Object.keys(config.plan.tools).length > 0) {
+            logger.warn('Plan phase tools provided - these will be ignored to avoid conflict with structured output', {
+                planToolCount: Object.keys(config.plan.tools).length,
+                note: 'Plan phase uses only structured output, Act phase receives all tools'
+            });
+        }
+
         logger.debug('PlanActAgent constructor called', {
             model: typeof config?.model === 'string' ? config.model : typeof config?.model,
             hasInstructions: Boolean(config?.instructions),
             planSteps: config?.plan?.steps,
-            actSteps: config?.act?.steps
+            actSteps: config?.act?.steps,
+            actToolCount: Object.keys(config?.act?.tools || {}).length
         });
 
         try {
@@ -233,7 +245,8 @@ The context from planning and actions is provided below. Use it to inform your r
         const planAgent = new Agent({
             model: this.model,
             system: this.planInstructions,
-            tools: this.planTools,
+            // Remove tools from plan phase to avoid conflict with structured output
+            // Tools will be available in act phase only
             stopWhen: stepCountIs(this.planSteps),
             experimental_output: Output.object({schema: PlanSchema}),
         });
@@ -265,7 +278,8 @@ The context from planning and actions is provided below. Use it to inform your r
             system: this.actInstructions,
             tools: this.actTools,
             stopWhen: stepCountIs(this.actSteps),
-            experimental_output: Output.object({schema: actStepSchema}),
+            // Remove structured output to avoid tools + structured output conflict
+            // Let agent generate natural text responses instead
         });
 
         const planQueue = [...plan.steps];
@@ -274,6 +288,12 @@ The context from planning and actions is provided below. Use it to inform your r
         let iterationCount = 0;
 
         const streamRunner = async function* (this: PlanActAgent) {
+            // If no plan steps were generated, create a default action to respond directly
+            if (planQueue.length === 0) {
+                logger.debug('No plan steps generated - will proceed directly to response phase');
+                return; // Skip act phase entirely
+            }
+
             while (planQueue.length > 0 && iterationCount < MAX_ACT_ITERATIONS) {
                 iterationCount++;
                 logger.debug(`Act phase iteration ${iterationCount}/${MAX_ACT_ITERATIONS}`, { queueLength: planQueue.length });
@@ -282,39 +302,40 @@ The context from planning and actions is provided below. Use it to inform your r
                 const actionStream = this.runSingleAction(actAgent, input, currentStep, previousActions);
 
                 let lastAction: z.infer<typeof actStepSchema> | undefined;
-                const partialCollector = (async () => {
-                    for await (const partial of actionStream.experimental_partialOutputStream) {
-                        if (partial && partial.action && partial.observation) {
-                            const additions = PlanActAgent.toPlanSteps(partial.addPlanSteps);
-                            const reason = partial.addPlanStepsReason;
+                let streamError: ClientExecutionRequiredError | Error | undefined;
 
-                            if (additions.length) {
-                                // Log when steps are added dynamically
-                                if (reason) {
-                                    logger.info(`Dynamic steps added to plan (${additions.length} steps)`, {
-                                        reason,
-                                        newSteps: additions.map(s => s.title)
-                                    });
-                                } else {
-                                    logger.warn(`Dynamic steps added WITHOUT reason (${additions.length} steps)`, {
-                                        newSteps: additions.map(s => s.title)
-                                    });
-                                }
-
-                                for (let index = additions.length - 1; index >= 0; index -= 1) {
-                                    planQueue.unshift(additions[index]);
-                                }
-                            }
-
-                            lastAction = {
-                                action: partial.action,
-                                observation: partial.observation,
-                                ...(additions.length ? {
-                                    addPlanSteps: additions,
-                                    ...(reason ? { addPlanStepsReason: reason } : {})
-                                } : {}),
-                            };
+                // Since we removed structured output, we need to extract action-observation from text
+                const textCollector = (async () => {
+                    let fullText = '';
+                    for await (const chunk of actionStream.textStream) {
+                        if (typeof chunk === 'string' && chunk.length > 0) {
+                            fullText += chunk;
                         }
+                    }
+
+                    // Parse the response to extract action and observation
+                    if (fullText) {
+                        // Simple pattern matching - look for action/observation patterns
+                        const actionMatch = fullText.match(/action[:\s]*([^.]*?)(?:\n|$)/im) ||
+                                        fullText.match(/i["']?([^"']*)["']?[^:]*action/im) ||
+                                        fullText.match(/^([^.]*?)(?=\n|m\.)/);
+
+                        const obsMatch = fullText.match(/observation[:\s]*([^.]*?)(?:\n|$)/im) ||
+                                     fullText.match(/observation[:\s]*([^.]*?)(?:\n|$)/im) ||
+                                     fullText.match(/result[:\s]*([^.]*?)(?:\n|$)/im);
+
+                        const action = actionMatch?.[1]?.trim() || 'Action taken by agent';
+                        const observation = obsMatch?.[1]?.trim() || fullText.trim();
+
+                        lastAction = {
+                            action,
+                            observation,
+                        };
+
+                        logger.debug('Parsed action from text response', {
+                            action,
+                            observation: observation.substring(0, 100) + (observation.length > 100 ? '...' : '')
+                        });
                     }
                 })();
 
@@ -322,8 +343,40 @@ The context from planning and actions is provided below. Use it to inform your r
                     for await (const chunk of actionStream.fullStream) {
                         yield chunk;
                     }
+                } catch (error) {
+                    // Capture error for processing after stream collection completes
+                    if (error instanceof ClientExecutionRequiredError) {
+                        streamError = error;
+                        logger.info('Client tool execution required', {
+                            toolName: error.toolName,
+                            toolCallId: error.toolCallId
+                        });
+                    } else {
+                        streamError = error instanceof Error ? error : new Error(String(error));
+                    }
                 } finally {
-                    await partialCollector;
+                    await textCollector;
+                }
+
+                // If client tool execution was required, create an action that reflects this
+                if (streamError instanceof ClientExecutionRequiredError) {
+                    lastAction = {
+                        action: `Attempted to call client tool: ${streamError.toolName} (${streamError.toolCallId})`,
+                        observation: `Client tool requires execution on client side. Tool: ${streamError.toolName}. This tool call needs to be sent to the client for execution.`,
+                    };
+                    logger.info('Created client tool placeholder action', { toolName: streamError.toolName });
+                } else if (streamError && !lastAction) {
+                    // For other errors, if we don't have an action yet, log but continue
+                    logger.warn('Stream error occurred but action collection may have succeeded', {
+                        error: streamError instanceof Error ? streamError.message : String(streamError)
+                    });
+                } else if (!lastAction) {
+                    // If we couldn't parse action from text, create a generic one
+                    lastAction = {
+                        action: 'Processed plan step',
+                        observation: 'Action completed (details not explicitly parsed from text response)'
+                    };
+                    logger.warn('Could not parse structured action from text response, using generic action');
                 }
 
                 if (lastAction) {
@@ -340,14 +393,7 @@ The context from planning and actions is provided below. Use it to inform your r
         return Object.assign(stream, { collectedActions: previousActions });
     }
 
-    private static toPlanSteps(candidate: unknown): PlanStep[] {
-        if (!candidate) {
-            return [];
-        }
-
-        const result = PlanStepsSchema.safeParse(candidate);
-        return result.success ? result.data : [];
-    }
+    // NOTE: toPlanSteps removed since we no longer use structured output with addPlanSteps
 
     static planStepToMessage(step: z.infer<typeof PlanSchema>['steps'][number]): ModelMessage {
         return {
@@ -437,7 +483,8 @@ The context from planning and actions is provided below. Use it to inform your r
     }
 
     get planTools() {
-        return this.config.plan?.tools || PlanActAgent.DEFAULT_PLAN_TOOLS;
+        // Plan phase does not use tools to avoid conflict with structured output
+        return PlanActAgent.DEFAULT_PLAN_TOOLS;
     }
 
     get planSteps() {
