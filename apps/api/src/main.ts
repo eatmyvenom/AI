@@ -3,6 +3,7 @@ import 'reflect-metadata';
 import type { LogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ensureEnv } from '@packages/agents';
+import { loadConfigWithMigration } from '@packages/config';
 import { NestLogger, createLogger } from '@packages/logger';
 import { initializeMCPToolsInBackground, closeMCPClients } from '@packages/tools';
 
@@ -12,10 +13,11 @@ import { AppModule } from './modules/app.module';
 ensureEnv();
 
 async function bootstrap() {
-  // Map LOG_LEVEL env var to NestJS log levels
-  // Your logger: debug, info, warn, error
-  // NestJS: log (→info), debug (→debug), verbose (→debug), warn, error
-  const logLevel = process.env.LOG_LEVEL?.toLowerCase() || 'info';
+  // Load configuration
+  const config = loadConfigWithMigration();
+
+  // Map log level from config to NestJS log levels
+  const logLevel = config.api.logLevel;
 
   const logLevels = ((): LogLevel[] => {
     switch (logLevel) {
@@ -40,12 +42,7 @@ async function bootstrap() {
   const logger = createLogger('api');
   app.useLogger(new NestLogger(logger));
 
-  app.enableCors({
-    origin: true,
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Authorization', 'Content-Type'],
-    maxAge: 86400
-  });
+  app.enableCors(config.api.cors);
 
   // Global OpenAI-style error shaping
   app.useGlobalFilters(new OpenAIErrorFilter());
@@ -71,7 +68,7 @@ async function bootstrap() {
     next();
   });
 
-  const port = Number(process.env.PORT ?? 3000);
+  const port = config.api.port;
   await app.listen(port);
   logger.info(`API listening on http://localhost:${port}`);
 

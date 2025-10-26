@@ -16,6 +16,7 @@
     "@nestjs/core": "^11.1.6",
     "@nestjs/platform-express": "^11.1.6",
     "@packages/agents": "workspace:*",
+    "@packages/config": "workspace:*",
     "@packages/logger": "workspace:*",
     "@packages/tools": "workspace:*",
     "ai": "^5.0.56",

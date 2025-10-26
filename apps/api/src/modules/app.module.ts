@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { createCompletionAgent } from '@packages/agents';
+import { loadConfigWithMigration } from '@packages/config';
 
 import { AuthGuard } from '../guards/auth.guard';
 import { LoggingInterceptor } from '../interceptors/logging.interceptor';
@@ -16,12 +17,13 @@ import { ModelController } from './models/model.controller';
     {
       provide: CHAT_AGENT_TOKEN,
       useFactory: () => {
+        const config = loadConfigWithMigration();
         return createCompletionAgent({
           defaultAgent: 'plan-act',
           // Tools are now handled dynamically per-request in the adapter
           chat: {},
           planAct: {
-            model: process.env.MODEL
+            model: config.provider.defaultModel
           }
         });
       }

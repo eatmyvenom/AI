@@ -12,6 +12,7 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@packages/config": "workspace:*",
     "ai": "^5.0.56",
     "zod": "^4.1.11"
   }

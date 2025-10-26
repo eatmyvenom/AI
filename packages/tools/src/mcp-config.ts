@@ -1,10 +1,14 @@
 /**
  * MCP Server Configuration
  *
- * Flexible MCP server configuration via environment variables.
- * Simply provide MCP server URLs and the system will configure them automatically.
+ * Flexible MCP server configuration via configuration file.
+ * Supports HTTP, SSE, and STDIO transports with full configuration options.
  */
 
+import { loadConfigWithMigration } from '@packages/config';
+import type { MCPServerConfig as ConfigMCPServerConfig } from '@packages/config';
+
+// Re-export types from config package for backward compatibility
 export enum MCPTransportType {
   STDIO = 'stdio',
   SSE = 'sse',
@@ -26,6 +30,8 @@ export interface SSETransportConfig {
 export interface HTTPTransportConfig {
   type: MCPTransportType.HTTP;
   url: string;
+  headers?: Record<string, string>;
+  timeout?: number;
 }
 
 export type MCPTransportConfig = StdioTransportConfig | SSETransportConfig | HTTPTransportConfig;
@@ -41,52 +47,55 @@ export interface MCPServerConfig {
   enabled: boolean;
   /** Optional: specific tools to enable from this server (empty = all) */
   enabledTools?: string[];
+  /** Retry configuration */
+  retry?: {
+    attempts: number;
+    backoff: 'linear' | 'exponential';
+  };
 }
 
 /**
- * Generate a server ID from a URL
+ * Convert config package MCP server config to legacy format for backward compatibility
  */
-function generateServerId(url: string, index: number): string {
-  try {
-    const urlObj = new URL(url);
-    const hostname = urlObj.hostname.replace(/\./g, '-');
-    return `mcp-${hostname}-${index}`;
-  } catch {
-    return `mcp-server-${index}`;
-  }
+function configToLegacyServer(configServer: ConfigMCPServerConfig): MCPServerConfig {
+  const transport = configServer.transport as MCPTransportConfig;
+
+  return {
+    id: configServer.id,
+    name: configServer.name,
+    transport,
+    enabled: configServer.enabled,
+    enabledTools: configServer.enabledTools,
+    retry: configServer.retry,
+  };
 }
 
 /**
- * Generate a server name from a URL
- */
-function generateServerName(url: string): string {
-  try {
-    const urlObj = new URL(url);
-    return `MCP Server (${urlObj.hostname})`;
-  } catch {
-    return 'MCP Server';
-  }
-}
-
-/**
- * Get MCP server configuration from environment variables
+ * Get MCP server configuration from configuration file
  *
- * Configuration via environment variables:
+ * Configuration is now loaded from config.js or config.json file.
+ * Falls back to environment variables for backward compatibility.
  *
- * Simple approach (recommended):
- * - MCP_SERVER_URLS: Comma-separated list of HTTP/SSE URLs
- *   Example: MCP_SERVER_URLS=https://mcp.tavily.com/mcp/?tavilyApiKey=xxx,https://another-server.com/mcp
- *
- * Advanced approach (per-server config):
- * - MCP_SERVER_1_URL: URL for server 1
- * - MCP_SERVER_1_TRANSPORT: Transport type (http, sse, stdio)
- * - MCP_SERVER_1_NAME: Optional custom name
- * - MCP_SERVER_2_URL: URL for server 2
- * - ... and so on
- *
- * All servers default to HTTP transport unless specified otherwise.
+ * See config.example.js for the recommended configuration format.
  */
 export function getMCPServerConfigs(): MCPServerConfig[] {
+  try {
+    const config = loadConfigWithMigration();
+
+    if (config.mcp.enabled && config.mcp.servers.length > 0) {
+      return config.mcp.servers.map(configToLegacyServer);
+    }
+
+    return getLegacyMCPServerConfigs();
+  } catch {
+    return getLegacyMCPServerConfigs();
+  }
+}
+
+/**
+ * Get MCP server configuration from legacy environment variables (backward compatibility)
+ */
+function getLegacyMCPServerConfigs(): MCPServerConfig[] {
   const configs: MCPServerConfig[] = [];
 
   // Simple approach: MCP_SERVER_URLS
@@ -159,8 +168,53 @@ export function getMCPServerConfigs(): MCPServerConfig[] {
 }
 
 /**
+ * Generate a server ID from a URL
+ */
+function generateServerId(url: string, index: number): string {
+  try {
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname.replace(/\./g, '-');
+    return `mcp-${hostname}-${index}`;
+  } catch {
+    return `mcp-server-${index}`;
+  }
+}
+
+/**
+ * Generate a server name from a URL
+ */
+function generateServerName(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    return `MCP Server (${urlObj.hostname})`;
+  } catch {
+    return 'MCP Server';
+  }
+}
+
+/**
  * Check if MCP tools are enabled globally
  */
 export function isMCPEnabled(): boolean {
-  return process.env.DISABLE_MCP_TOOLS !== 'true';
+  try {
+    const config = loadConfigWithMigration();
+    return config.mcp.enabled;
+  } catch {
+    return process.env.DISABLE_MCP_TOOLS !== 'true';
+  }
+}
+
+export function getMCPGlobalConfig() {
+  try {
+    const config = loadConfigWithMigration();
+    return config.mcp.global;
+  } catch {
+    return {
+      timeout: 60000,
+      retry: {
+        attempts: 2,
+        backoff: 'exponential' as const,
+      },
+    };
+  }
 }

@@ -19,6 +19,13 @@ pnpm-debug.log*
 .env.*
 !.env.example
 
+# config files (keep examples)
+config.js
+config.json
+config.ts
+!config.example.js
+!config.example.json
+
 # misc
 .DS_Store
 .idea/

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Body, Controller, Inject, InternalServerErrorException, Post, Res } from '@nestjs/common';
 import type { AgentRunResult, ChatAgent, ChatCompletionInput, ReasoningDetail } from '@packages/agents';
 import { ChatCompletionSchema, resolveLanguageModel } from '@packages/agents';
+import { loadConfigWithMigration } from '@packages/config';
 import { createLogger } from '@packages/logger';
 import type { FinishReason, LanguageModelUsage } from 'ai';
 import { ZodValidationPipe } from 'nestjs-zod';
@@ -160,18 +161,20 @@ function isSseResponseLike(value: unknown): value is SseResponseLike {
 }
 
 async function handleStreamingResponse(res: SseResponseLike, agent: ChatAgent, payload: ChatCompletionInput): Promise<void> {
+  const config = loadConfigWithMigration();
+
   // Display the actual model id chosen by the current agent selection
   const model = (() => {
     const requested = payload.agent;
     if (requested === 'chat') {
-      return payload.model ?? process.env.MODEL ?? 'gpt-4.1-mini';
+      return payload.model ?? config.provider.defaultModel;
     }
     // plan-act default
     try {
       return resolveLanguageModel(payload.model).id;
     } catch {
       // fallback to any provided id to avoid blocking SSE headers
-      return payload.model ?? process.env.MODEL ?? 'gpt-4.1-mini';
+      return payload.model ?? config.provider.defaultModel;
     }
   })();
   const context: StreamingContext = {

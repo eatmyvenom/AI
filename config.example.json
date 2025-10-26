@@ -1,0 +1,96 @@
+{
+  "api": {
+    "port": 3000,
+    "logLevel": "info",
+    "cors": {
+      "origin": true,
+      "methods": ["GET", "POST", "OPTIONS"],
+      "allowedHeaders": ["Authorization", "Content-Type"],
+      "maxAge": 86400
+    }
+  },
+  "provider": {
+    "baseURL": "https://api.openai.com/v1",
+    "apiKey": "${PROVIDER_API_KEY}",
+    "defaultModel": "gpt-4.1-mini",
+    "includeUsage": true
+  },
+  "aiProviders": {
+    "openai": {
+      "apiKey": "${AI_OPENAI_API_KEY}"
+    },
+    "anthropic": {
+      "apiKey": "${AI_ANTHROPIC_API_KEY}"
+    },
+    "xai": {
+      "apiKey": "${AI_XAI_API_KEY}"
+    },
+    "groq": {
+      "apiKey": "${AI_GROQ_API_KEY}"
+    },
+    "deepinfra": {
+      "apiKey": "${AI_DEEPINFRA_API_KEY}"
+    },
+    "google": {
+      "apiKey": "${AI_GOOGLE_API_KEY}"
+    }
+  },
+  "mcp": {
+    "enabled": true,
+    "servers": [
+      {
+        "id": "tavily-search",
+        "name": "Tavily Web Search",
+        "transport": {
+          "type": "http",
+          "url": "https://mcp.tavily.com/mcp/",
+          "headers": {
+            "Authorization": "Bearer ${TAVILY_API_KEY}"
+          },
+          "timeout": 30000
+        },
+        "enabled": true,
+        "enabledTools": ["web_search", "web_extract"],
+        "retry": {
+          "attempts": 3,
+          "backoff": "exponential"
+        }
+      },
+      {
+        "id": "local-filesystem",
+        "name": "Local File System",
+        "transport": {
+          "type": "stdio",
+          "command": "npx",
+          "args": ["@modelcontextprotocol/server-filesystem", "/tmp"],
+          "env": {
+            "HOME": "${HOME}"
+          }
+        },
+        "enabled": true,
+        "retry": {
+          "attempts": 2,
+          "backoff": "linear"
+        }
+      }
+    ],
+    "global": {
+      "timeout": 60000,
+      "retry": {
+        "attempts": 2,
+        "backoff": "exponential"
+      }
+    }
+  },
+  "auth": {
+    "enabled": true,
+    "bearerToken": "${API_BEARER_TOKEN}",
+    "jwtSecret": "${JWT_SECRET}",
+    "allowAnonymous": false
+  },
+  "environment": {
+    "nodeEnv": "development",
+    "configPath": "${CONFIG_PATH}",
+    "envFile": ".env"
+  }
+}

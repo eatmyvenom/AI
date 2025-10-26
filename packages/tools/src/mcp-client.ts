@@ -14,6 +14,7 @@ import type { ToolSet } from 'ai';
 import {
   getMCPServerConfigs,
   isMCPEnabled,
+  getMCPGlobalConfig,
   MCPTransportType,
   type MCPServerConfig,
   type MCPTransportConfig,
@@ -57,14 +58,14 @@ class MCPClientManager {
   }
 
   private async doInitialize(): Promise<void> {
-    // Check if MCP is enabled globally
     if (!isMCPEnabled()) {
       console.log('[MCP] MCP tools are disabled');
       return;
     }
 
     const configs = getMCPServerConfigs();
-    console.log(`[MCP] Initializing ${configs.length} MCP server(s)`);
+    const globalConfig = getMCPGlobalConfig();
+    console.log(`[MCP] Initializing ${configs.length} MCP server(s) with global timeout: ${globalConfig.timeout}ms`);
 
     const results = await Promise.allSettled(
       configs.map(config => this.initializeClient(config))
@@ -90,7 +91,6 @@ class MCPClientManager {
 
   private async initializeClient(config: MCPServerConfig): Promise<void> {
     try {
-      // Create transport based on configuration
       const transport = this.createTransport(config.transport);
 
       // Create MCP client using AI SDK's experimental API
@@ -126,23 +126,25 @@ class MCPClientManager {
 
   private createTransport(config: MCPTransportConfig) {
     switch (config.type) {
-      case MCPTransportType.STDIO:
+      case MCPTransportType.STDIO: {
         return new StdioClientTransport({
           command: config.command,
           args: config.args,
           env: config.env,
         });
+      }
 
-      case MCPTransportType.SSE:
+      case MCPTransportType.SSE: {
         return new SSEClientTransport(new URL(config.url));
+      }
 
-      case MCPTransportType.HTTP:
+      case MCPTransportType.HTTP: {
         return new StreamableHTTPClientTransport(new URL(config.url));
+      }
 
-      default:
-        // SHUT THE FUCK UP
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
-        throw new Error(`Unknown transport type: ${(config as any)?.type ?? "undefined"}`);
+      default: {
+        throw new Error(`Unknown transport type`);
+      }
     }
   }
 

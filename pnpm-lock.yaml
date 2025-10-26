@@ -105,6 +105,9 @@ importers:
       '@packages/agents':
         specifier: workspace:*
         version: link:../../packages/agents
+      '@packages/config':
+        specifier: workspace:*
+        version: link:../../packages/config
       '@packages/logger':
         specifier: workspace:*
         version: link:../../packages/logger
@@ -157,6 +160,9 @@ importers:
       '@openrouter/ai-sdk-provider':
         specifier: ^1.2.0
         version: 1.2.0(ai@5.0.56(zod@4.1.11))(zod@4.1.11)
+      '@packages/config':
+        specifier: workspace:*
+        version: link:../config
       '@packages/logger':
         specifier: workspace:*
         version: link:../logger
@@ -170,6 +176,19 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11
 
+  packages/config:
+    dependencies:
+      zod:
+        specifier: ^4.1.11
+        version: 4.1.11
+    devDependencies:
+      '@types/node':
+        specifier: ^24.5.2
+        version: 24.5.2
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.2
+
   packages/logger:
     dependencies:
       '@nestjs/common':
@@ -181,6 +200,9 @@ importers:
 
   packages/tools:
     dependencies:
+      '@packages/config':
+        specifier: workspace:*
+        version: link:../config
       ai:
         specifier: ^5.0.56
         version: 5.0.56(zod@4.1.11)

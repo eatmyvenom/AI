@@ -1,4 +1,5 @@
 import { Controller, Get, NotFoundException, Options, Param, Res } from '@nestjs/common';
+import { loadConfigWithMigration } from '@packages/config';
 import type { Response } from 'express';
 
 type OpenAIModel = {
@@ -21,6 +22,7 @@ export class ModelController {
   @Get()
   listModels(): { object: 'list'; data: OpenAIModel[] } {
     const created = Math.floor(Date.now() / 1000);
+    const config = loadConfigWithMigration();
 
     const planActModel: OpenAIModel = {
       id: 'plan-act',
@@ -29,7 +31,7 @@ export class ModelController {
       owned_by: 'plan-act-agent'
     };
 
-    const defaultChatModelId = process.env.MODEL ?? 'gpt-4.1-mini';
+    const defaultChatModelId = config.provider.defaultModel;
 
     return {
       object: 'list',
@@ -48,6 +50,7 @@ export class ModelController {
   @Get(':id')
   getModel(@Param('id') id: string): OpenAIModel {
     const created = Math.floor(Date.now() / 1000);
+    const config = loadConfigWithMigration();
 
     if (id === 'plan-act') {
       return {
@@ -58,7 +61,7 @@ export class ModelController {
       };
     }
 
-    const defaultId = process.env.MODEL ?? 'gpt-4.1-mini';
+    const defaultId = config.provider.defaultModel;
 
     if (id === defaultId) {
       return {

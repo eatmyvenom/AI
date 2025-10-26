@@ -1,0 +1,32 @@
+{
+  "name": "@packages/config",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json -w",
+    "lint": "eslint src --ext .ts",
+    "test": "echo \"No tests yet\"",
+    "clean": "rimraf dist",
+    "config": "node dist/cli.js",
+    "config:validate": "node dist/cli.js validate",
+    "config:show": "node dist/cli.js show",
+    "config:migrate": "node dist/cli.js migrate"
+  },
+  "bin": {
+    "config": "dist/cli.js"
+  },
+  "dependencies": {
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2"
+  }
+}

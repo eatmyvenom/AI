@@ -4,19 +4,11 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createGroq } from '@ai-sdk/groq';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createXai } from '@ai-sdk/xai';
+import { loadConfigWithMigration } from '@packages/config';
 import { createLogger } from '@packages/logger';
 import { createProviderRegistry, NoSuchModelError, NoSuchProviderError, type LanguageModel } from 'ai';
 
 const logger = createLogger('agents:models');
-
-export const registry = createProviderRegistry({
-    anthropic: createAnthropic({ apiKey: process.env.AI_ANTHROPIC_API_KEY || '' }),
-    openai: createOpenAI({ apiKey: process.env.AI_OPENAI_API_KEY || '' }),
-    xai: createXai({ apiKey: process.env.AI_XAI_API_KEY || '' }),
-    groq: createGroq({ apiKey: process.env.AI_GROQ_API_KEY || '' }),
-    deepinfra: createDeepInfra({ apiKey: process.env.AI_DEEPINFRA_API_KEY || '' }),
-    google: createGoogleGenerativeAI({ apiKey: process.env.AI_GOOGLE_API_KEY || '' }),
-});
 
 const PROVIDER_ENV_VARS = {
     anthropic: 'AI_ANTHROPIC_API_KEY',
@@ -25,6 +17,15 @@ const PROVIDER_ENV_VARS = {
     groq: 'AI_GROQ_API_KEY',
     deepinfra: 'AI_DEEPINFRA_API_KEY',
     google: 'AI_GOOGLE_API_KEY',
+} as const;
+
+const DEFAULT_PROVIDER_BASE_URLS = {
+    anthropic: 'https://api.anthropic.com',
+    openai: 'https://api.openai.com/v1',
+    xai: 'https://api.x.ai',
+    groq: 'https://api.groq.com/openai/v1',
+    deepinfra: 'https://api.deepinfra.com/v1',
+    google: 'https://generativelanguage.googleapis.com/v1beta',
 } as const;
 
 const PROVIDER_DEFAULT_MODELS = {
@@ -44,6 +45,59 @@ interface ResolvedLanguageModel {
     id: string;
     model: LanguageModel;
 }
+
+/**
+ * Get API key for a provider from configuration or environment variables
+ */
+function getProviderApiKey(providerId: ProviderId): string | undefined {
+    try {
+        const config = loadConfigWithMigration();
+        return config.aiProviders[providerId]?.apiKey;
+    } catch {
+        // Fallback to environment variable
+        return process.env[PROVIDER_ENV_VARS[providerId]];
+    }
+}
+
+/**
+ * Get base URL for a provider from configuration or default
+ */
+function getProviderBaseURL(providerId: ProviderId): string | undefined {
+    try {
+        const config = loadConfigWithMigration();
+        return config.aiProviders[providerId]?.baseURL || DEFAULT_PROVIDER_BASE_URLS[providerId];
+    } catch {
+        // Return default URL
+        return DEFAULT_PROVIDER_BASE_URLS[providerId];
+    }
+}
+
+export const registry = createProviderRegistry({
+    anthropic: createAnthropic({
+        apiKey: getProviderApiKey('anthropic') || '',
+        baseURL: getProviderBaseURL('anthropic')
+    }),
+    openai: createOpenAI({
+        apiKey: getProviderApiKey('openai') || '',
+        baseURL: getProviderBaseURL('openai')
+    }),
+    xai: createXai({
+        apiKey: getProviderApiKey('xai') || '',
+        baseURL: getProviderBaseURL('xai')
+    }),
+    groq: createGroq({
+        apiKey: getProviderApiKey('groq') || '',
+        baseURL: getProviderBaseURL('groq')
+    }),
+    deepinfra: createDeepInfra({
+        apiKey: getProviderApiKey('deepinfra') || '',
+        baseURL: getProviderBaseURL('deepinfra')
+    }),
+    google: createGoogleGenerativeAI({
+        apiKey: getProviderApiKey('google') || '',
+        baseURL: getProviderBaseURL('google')
+    }),
+});
 
 export function resolveLanguageModel(model?: string | LanguageModel): ResolvedLanguageModel {
     logger.debug('resolveLanguageModel called', { model: typeof model === 'string' ? model : typeof model });
@@ -125,10 +179,9 @@ function getFirstConfiguredProvider(): ProviderId | undefined {
 }
 
 function hasApiKey(providerId: ProviderId) {
-    const envVar = PROVIDER_ENV_VARS[providerId];
-    const value = process.env[envVar];
-    const hasKey = Boolean(envVar && value);
-    logger.debug(`hasApiKey check for ${providerId}`, { envVar, hasValue: Boolean(value), hasKey });
+    const apiKey = getProviderApiKey(providerId);
+    const hasKey = Boolean(apiKey);
+    logger.debug(`hasApiKey check for ${providerId}`, { hasKey });
     return hasKey;
 }
 
@@ -140,16 +193,16 @@ function ensureProviderIsConfigured(providerId: string) {
         return;
     }
 
-    const envVar = PROVIDER_ENV_VARS[providerId];
+    const apiKey = getProviderApiKey(providerId);
 
-    if (envVar && !process.env[envVar]) {
-        logger.error(`Provider "${providerId}" is not configured`, { envVar, isSet: false });
+    if (!apiKey) {
+        logger.error(`Provider "${providerId}" is not configured`, { isSet: false });
         throw new Error(
-            `Provider "${providerId}" is not configured. Set the ${envVar} environment variable or choose another model.`
+            `Provider "${providerId}" is not configured. Set the API key in configuration file or environment variable ${PROVIDER_ENV_VARS[providerId]}.`
         );
     }
 
-    logger.debug(`Provider "${providerId}" is properly configured`, { envVar });
+    logger.debug(`Provider "${providerId}" is properly configured`);
 }
 
 function normalizeModelIdentifier(model: string) {

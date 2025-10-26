@@ -21,6 +21,7 @@
     "@ai-sdk/openai-compatible": "^1.0.19",
     "@ai-sdk/xai": "^2.0.23",
     "@openrouter/ai-sdk-provider": "^1.2.0",
+    "@packages/config": "workspace:*",
     "@packages/logger": "workspace:*",
     "@packages/tools": "workspace:*",
     "ai": "^5.0.56",

@@ -1,0 +1,226 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AI Agent Configuration",
+  "description": "Configuration schema for AI Agent system",
+  "type": "object",
+  "properties": {
+    "api": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 3000,
+          "description": "Port for the API server"
+        },
+        "logLevel": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error"],
+          "default": "info",
+          "description": "Logging level"
+        },
+        "cors": {
+          "type": "object",
+          "properties": {
+            "origin": {
+              "oneOf": [
+                { "type": "boolean" },
+                { "type": "array", "items": { "type": "string" } }
+              ],
+              "default": true,
+              "description": "CORS origins to allow"
+            },
+            "methods": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": ["GET", "POST", "OPTIONS"],
+              "description": "HTTP methods to allow"
+            },
+            "allowedHeaders": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": ["Authorization", "Content-Type"],
+              "description": "Headers to allow"
+            },
+            "maxAge": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 86400,
+              "description": "Cache duration for preflight requests"
+            }
+          }
+        }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "properties": {
+        "baseURL": {
+          "type": "string",
+          "format": "uri",
+          "default": "https://api.openai.com/v1",
+          "description": "Base URL for the provider API"
+        },
+        "apiKey": {
+          "type": "string",
+          "description": "API key for the provider"
+        },
+        "defaultModel": {
+          "type": "string",
+          "default": "gpt-4.1-mini",
+          "description": "Default model to use"
+        },
+        "includeUsage": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to include usage information"
+        }
+      }
+    },
+    "aiProviders": {
+      "type": "object",
+      "properties": {
+        "openai": {
+          "type": "object",
+          "properties": {
+            "apiKey": { "type": "string" },
+            "baseURL": { "type": "string", "format": "uri" }
+          }
+        },
+        "anthropic": {
+          "type": "object",
+          "properties": {
+            "apiKey": { "type": "string" },
+            "baseURL": { "type": "string", "format": "uri" }
+          }
+        },
+        "xai": {
+          "type": "object",
+          "properties": {
+            "apiKey": { "type": "string" },
+            "baseURL": { "type": "string", "format": "uri" }
+          }
+        },
+        "groq": {
+          "type": "object",
+          "properties": {
+            "apiKey": { "type": "string" },
+            "baseURL": { "type": "string", "format": "uri" }
+          }
+        },
+        "deepinfra": {
+          "type": "object",
+          "properties": {
+            "apiKey": { "type": "string" },
+            "baseURL": { "type": "string", "format": "uri" }
+          }
+        },
+        "google": {
+          "type": "object",
+          "properties": {
+            "apiKey": { "type": "string" },
+            "baseURL": { "type": "string", "format": "uri" }
+          }
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether MCP tools are enabled"
+        },
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "description": "Unique server identifier" },
+              "name": { "type": "string", "description": "Human-readable name" },
+              "transport": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": { "const": "stdio" },
+                      "command": { "type": "string" },
+                      "args": { "type": "array", "items": { "type": "string" } },
+                      "env": { "type": "object", "additionalProperties": { "type": "string" } }
+                    },
+                    "required": ["type", "command"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": { "const": "sse" },
+                      "url": { "type": "string", "format": "uri" }
+                    },
+                    "required": ["type", "url"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": { "const": "http" },
+                      "url": { "type": "string", "format": "uri" },
+                      "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                      "timeout": { "type": "integer", "minimum": 1 }
+                    },
+                    "required": ["type", "url"]
+                  }
+                ]
+              },
+              "enabled": { "type": "boolean", "default": true },
+              "enabledTools": { "type": "array", "items": { "type": "string" } },
+              "retry": {
+                "type": "object",
+                "properties": {
+                  "attempts": { "type": "integer", "minimum": 1, "default": 3 },
+                  "backoff": { "enum": ["linear", "exponential"], "default": "exponential" }
+                }
+              }
+            },
+            "required": ["id", "name", "transport"]
+          },
+          "default": []
+        },
+        "global": {
+          "type": "object",
+          "properties": {
+            "timeout": { "type": "integer", "minimum": 1, "default": 60000 },
+            "retry": {
+              "type": "object",
+              "properties": {
+                "attempts": { "type": "integer", "minimum": 1, "default": 2 },
+                "backoff": { "enum": ["linear", "exponential"], "default": "exponential" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "bearerToken": { "type": "string" },
+        "jwtSecret": { "type": "string" },
+        "allowAnonymous": { "type": "boolean", "default": false }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "nodeEnv": {
+          "type": "string",
+          "enum": ["development", "production", "test"],
+          "default": "development"
+        },
+        "configPath": { "type": "string" },
+        "envFile": { "type": "string" }
+      }
+    }
+  }
+}

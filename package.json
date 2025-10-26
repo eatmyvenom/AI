@@ -7,7 +7,12 @@
     "dev": "turbo run dev --parallel",
     "lint": "turbo run lint",
     "test": "turbo run test",
-    "clean": "rimraf node_modules && rimraf .turbo && rimraf dist && turbo run clean"
+    "clean": "rimraf node_modules && rimraf .turbo && rimraf dist && turbo run clean",
+    "config": "node packages/config/dist/cli.js",
+    "config:validate": "node packages/config/dist/cli.js validate",
+    "config:show": "node packages/config/dist/cli.js show",
+    "config:migrate": "node packages/config/dist/cli.js migrate",
+    "config:schema": "node packages/config/dist/cli.js schema"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.38",
