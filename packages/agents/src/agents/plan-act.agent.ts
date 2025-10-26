@@ -3,7 +3,7 @@ import { Experimental_Agent as Agent, ModelMessage, Output, stepCountIs, ToolSet
 import { z } from 'zod';
 
 import { resolveLanguageModel } from '../models';
-import type { MergedTools } from '../tools';
+import type { MergedTools, ToolMetadata } from '../tools';
 import { ClientExecutionRequiredError } from '../tools/converter';
 
 const logger = createLogger('agents:plan-act');
@@ -12,7 +12,12 @@ export const PlanSchema = z.object({
     steps: z.array(z.object({
         title: z.string(),
         instructions: z.string(),
-        relevantContext: z.string()
+        relevantContext: z.string(),
+        toolStrategy: z.object({
+            toolName: z.string().optional().describe("Name of the tool to use for this step (if any)"),
+            reason: z.string().optional().describe("Why this tool is better than internal knowledge"),
+            fallbackToInternal: z.boolean().optional().describe("If the tool fails, should we fall back to internal knowledge?")
+        }).optional().describe("Strategy for using tools in this step")
     }))
 });
 
@@ -40,6 +45,7 @@ export interface PlanActAgentConfig {
         steps?: number;
         tools?: ToolSet;
         instructions?: string;  // Plan phase-specific instructions
+        availableTools?: ToolMetadata[];  // List of available tools for planning (no access, just metadata)
     };
     act?: {
         steps?: number;
@@ -57,41 +63,113 @@ export class PlanActAgent {
 
     static PLAN_PHASE_INSTRUCTIONS = `You are in the PLANNING phase of a Plan-and-Act agent.
 
-TASK: Analyze the user's query and create an appropriate execution plan.
+TASK: Analyze the user's query and create an appropriate execution plan that intelligently uses available tools.
+
+AVAILABLE TOOLS CONTEXT:
+You have access to a LIST of tools that will be available in the action phase, but you CANNOT use them directly during planning. Use this list to plan tool usage strategically.
+
+TOOL SELECTION STRATEGY:
+CRITICAL: Prefer tools over internal knowledge when tools provide superior information:
+
+1. Web Search Tools (e.g., tavily, search_web, search):
+   ✅ Always use for: Current events, real-time data, recent facts, trending topics
+   ✅ Always use for: Factual queries requiring up-to-date information
+   ✅ Always use for: News, market data, weather, sports scores
+   ❌ Avoid for: Mathematics,逻辑推理, creative writing, code examples
+   Reason: Web search provides current, accurate data vs potentially outdated internal knowledge
+
+2. Calculator Tools (e.g., calculator, compute):
+   ✅ Always use for: Mathematical calculations, numerical computations
+   ✅ Always use for: Complex arithmetic, percentages, statistical calculations
+   Reason: Guaranteed accuracy vs human error potential
+
+3. Time/Date Tools (e.g., getCurrentTime, time):
+   ✅ Always use for: Current time, timestamps, scheduling queries
+   Reason: Provides accurate, timezone-aware current information
+
+4. File/System Tools (e.g., readFile, writeFile, bash):
+   ✅ Use when: Query involves reading files, system operations, code analysis
+   Reason: Direct access to actual files/system state vs assumptions
+
+5. API/Web Tools (e.g., fetch, api_call):
+   ✅ Use when: Need specific external data, service integrations
+   Reason: Real-time data from authoritative sources
+
+PLANNING GUIDELINES:
 
 COMPLEXITY ASSESSMENT:
-- Simple queries (basic math, definitions, single facts): Create 1 step
-  Example: "What is 2+2?" → [{ title: "Calculate sum", instructions: "Add 2+2 and return result", relevantContext: "Basic arithmetic" }]
+- Simple queries (basic math, definitions with internal knowledge): Create 1 step
+  Example: "What is 2+2?" → [{ title: "Calculate sum", instructions: "Add 2+2 using calculator", relevantContext: "Basic arithmetic", toolStrategy: { toolName: "calculator", reason: "Guaranteed accuracy for mathematical calculations", fallbackToInternal: true } }]
 
 - Moderate queries (2-3 related lookups, basic multi-step reasoning): Create 2-3 steps
-  Example: "What are the benefits of React vs Vue?" → 2 steps (gather React info, gather Vue info)
+  Example: "What are the benefits of React vs Vue?" → 2 steps (search current React info, search current Vue info)
 
 - Complex queries (research, analysis, multi-tool coordination): Create 3-5 steps
-  Example: "Build me a deployment pipeline" → Multiple distinct steps
+  Example: "What's the current stock price of Tesla and how has it trended?" → Multiple steps with web search
+
+TOOL STRATEGY REQUIREMENTS:
+For each step that should use a tool, include toolStrategy with:
+- toolName: Exact name of the tool from the available tools list
+- reason: Why this tool is superior to internal knowledge
+- fallbackToInternal: If tool fails, should we use internal knowledge?
+
+INTERNAL KNOWLEDGE ONLY SCENARIOS:
+- Creative writing, brain teasers, hypothetical scenarios
+- Logic puzzles, reasoning problems
+- General concepts, historical knowledge (not requiring current data)
+- Code examples, tutorials (unless referencing current libs)
 
 STEP QUALITY GUIDELINES:
 - Each step = ONE distinct action or tool call
-- Be specific: "Search AWS docs for Lambda pricing" NOT "Gather information"
-- Include the purpose in relevantContext: "Need pricing data for comparison"
-- Steps execute sequentially, so order matters
+- Be specific: "Search web for 'current React best practices 2025'" NOT "Gather React information"
+- Include the purpose in relevantContext
+- Explicitly justify tool choices in toolStrategy.reason
+- Steps execute sequentially, order matters
 
-IMPORTANT:
-- More steps ≠ better quality
-- For simple queries, 1 well-defined step is better than 3 vague ones
-- If unsure, err on the side of fewer steps
+CONCLUSION:
+Your plan should make clear WHEN and WHY to use tools. When tools provide superior information, explicitly plan to use them. Only rely on internal knowledge when tools aren't available or aren't advantageous.
 
-OUTPUT: Array of steps with title, instructions, and relevantContext for each.`;
+OUTPUT: Array of steps with title, instructions, relevantContext, and optional toolStrategy for each.`;
 
     static ACT_PHASE_INSTRUCTIONS = `You are in the ACTION phase of a Plan-and-Act agent.
 
 TASK: Execute the current plan step by taking ONE action and recording what you observe.
 
+CRITICAL TOOL STRATEGY GUIDANCE:
+The planning phase determined the optimal tool usage strategy. You MUST follow it:
+
+✅ IF plan step includes toolStrategy:
+- Execute the EXACT tool specified in toolStrategy.toolName
+- Do not substitute with other tools or internal knowledge
+- The reason field tells you WHY this tool was chosen - trust that reasoning
+- If tool fails, only use fallbackToInternal=true to try internal knowledge
+
+❌ DO NOT IGNORE TOOL STRATEGY unless:
+- Specified tool is not actually available (check your tool list)
+- Tool throws an error AND fallbackToInternal=false
+- The tool is clearly mismatched to the query (e.g., calculator for web search)
+
 OUTPUT FORMAT:
 {
-  "action": "What you did (e.g., 'Calculated 2+2', 'Called search API with query X')",
+  "action": "What you did (e.g., 'Calculated 2+2 using calculator', 'Called tavily web search with query X')",
   "observation": "What you learned or produced (e.g., 'Result is 4', 'Found 3 relevant documents')",
   "addPlanSteps": [] or undefined (READ BELOW - usually leave empty!),
   "addPlanStepsReason": "Required if adding steps - explain why"
+}
+
+TOOL EXECUTION EXAMPLES:
+Following tool strategy (DEFAULT - preferred when specified):
+{
+  "action": "Used tavily to search for 'current Tesla stock price'",
+  "observation": "TSLA is trading at $242.18 as of market close today, up 2.3% from yesterday",
+  "addPlanSteps": undefined
+}
+
+Internal knowledge fallback (when tool fails and fallbackToInternal=true):
+{
+  "action": "Tavily search failed, used internal knowledge about capital cities",
+  "observation": "The capital of France is Paris",
+  "addPlanSteps": undefined
 }
 
 CRITICAL: When to use addPlanSteps
@@ -100,10 +178,10 @@ DEFAULT BEHAVIOR: Leave addPlanSteps EMPTY (undefined or [])
 This field is for UNEXPECTED situations only.
 
 ✅ ADD STEPS ONLY IF:
-1. You discovered unexpected complexity
+1. You discovered unexpected complexity (not anticipated in planning)
    Example: "Tool returned 50 results when we expected 5, need separate analysis step"
 
-2. You hit a blocker
+2. You hit a blocker not foreseen in planning
    Example: "API requires authentication token, need step to obtain token first"
 
 3. You found a missing prerequisite
@@ -113,28 +191,9 @@ This field is for UNEXPECTED situations only.
 - You successfully completed the current step → just record observation
 - The observation contains enough info to continue → leave empty
 - You're following a pattern → each step is independent
-- You think you "should" add more steps → only add if truly necessary
+- The planned tool strategy worked as expected → no need to modify plan
 
-EXAMPLES:
-
-Simple query execution (DEFAULT - most common):
-{
-  "action": "Calculated 2+2 using basic arithmetic",
-  "observation": "The result is 4",
-  "addPlanSteps": undefined
-}
-
-Unexpected complexity discovered (RARE):
-{
-  "action": "Searched pricing docs",
-  "observation": "Found 12 different pricing tiers, each requiring separate analysis",
-  "addPlanSteps": [
-    { "title": "Analyze standard tier", "instructions": "Extract standard tier pricing", "relevantContext": "Most commonly used tier" }
-  ],
-  "addPlanStepsReason": "Discovered 12 pricing tiers that were not anticipated in original plan, need separate analysis for most common tier"
-}
-
-REMEMBER: If in doubt, leave addPlanSteps empty. It's better to execute the plan as-is than to add unnecessary complexity.`;
+REMEMBER: The planner chose tools strategically. Follow that strategy unless there's a compelling reason not to. It's better to execute the planned tool strategy than to second-guess it.`;
 
     static RESPONSE_PHASE_INSTRUCTIONS = `You are in the RESPONSE phase of a Plan-and-Act agent.
 
@@ -199,7 +258,10 @@ The context from planning and actions is provided below. Use it to inform your r
 
     run(input: ModelMessage[]) {
         const pipeline = async function* (this: PlanActAgent) {
-            const planStream = this.runPlanPhase(input);
+            // Extract tool metadata for planning phase
+            const availableTools = this.extractAvailableTools();
+
+            const planStream = this.runPlanPhase(input, availableTools);
             let resolvedPlan: z.infer<typeof PlanSchema> | undefined;
 
             const planCollector = (async () => {
@@ -241,10 +303,21 @@ The context from planning and actions is provided below. Use it to inform your r
         return pipeline.call(this);
     }
 
-    runPlanPhase(input: ModelMessage[], ) {
+    runPlanPhase(input: ModelMessage[], availableTools?: ToolMetadata[]) {
+        // Build enhanced system message with available tools context
+        let planSystemMessage = this.planInstructions;
+
+        if (availableTools && availableTools.length > 0) {
+            const toolsList = availableTools.map(tool =>
+                `- ${tool.name}: ${this.getToolDescription(tool)}`
+            ).join('\n');
+
+            planSystemMessage += `\n\nAVAILABLE TOOLS FOR ACTION PHASE:\n${toolsList}\n\nRemember: You CANNOT use these tools now in planning phase, but you can plan to use them in the action phase using toolStrategy.`;
+        }
+
         const planAgent = new Agent({
             model: this.model,
-            system: this.planInstructions,
+            system: planSystemMessage,
             // Remove tools from plan phase to avoid conflict with structured output
             // Tools will be available in act phase only
             stopWhen: stepCountIs(this.planSteps),
@@ -497,6 +570,61 @@ The context from planning and actions is provided below. Use it to inform your r
 
     get actTools() {
         return this.config.act?.tools || PlanActAgent.DEFAULT_ACT_TOOLS;
+    }
+
+    extractAvailableTools(): ToolMetadata[] {
+        // Extract tool metadata from merged tools for planning phase
+        const mergedTools = this.config.act?.mergedTools;
+        if (!mergedTools) {
+            return [];
+        }
+
+        const allTools: ToolMetadata[] = [];
+
+        // Add client tools
+        for (const clientToolName of mergedTools.clientToolNames) {
+            const metadata = mergedTools.metadata.get(clientToolName);
+            if (metadata) {
+                allTools.push(metadata);
+            }
+        }
+
+        // Add built-in tools (including MCP tools)
+        for (const builtinToolName of mergedTools.builtinToolNames) {
+            const metadata = mergedTools.metadata.get(builtinToolName);
+            if (metadata) {
+                allTools.push(metadata);
+            }
+        }
+
+        return allTools;
+    }
+
+    getToolDescription(tool: ToolMetadata): string {
+        // Try to extract description from the original definition
+        if (tool.originalDefinition?.function?.description) {
+            return tool.originalDefinition.function.description;
+        }
+
+        // Fallback descriptions based on tool name patterns
+        const name = tool.name.toLowerCase();
+        if (name.includes('search') || name.includes('tavily') || name.includes('web')) {
+            return 'Web search tool for current information';
+        }
+        if (name.includes('calc') || name.includes('compute')) {
+            return 'Mathematical calculator for accurate computations';
+        }
+        if (name.includes('time') || name.includes('date')) {
+            return 'Current time and date information';
+        }
+        if (name.includes('file') || name.includes('read') || name.includes('write')) {
+            return 'File system access tool';
+        }
+        if (name.includes('api') || name.includes('fetch')) {
+            return 'External API/data access tool';
+        }
+
+        return 'Available tool for action phase';
     }
 
     get model() {

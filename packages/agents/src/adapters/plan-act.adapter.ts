@@ -125,11 +125,17 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
           builtinTools: mergedTools.builtinToolNames.length,
         });
 
+        // Extract available tool metadata for planning phase
+        const availableTools = Array.from(mergedTools.metadata.values());
+
         const agent = new PlanActAgent({
           model,
           instructions: config.instructions,
-          // Plan phase gets empty tools to avoid structured output conflict
-          plan: { steps: config.plan?.steps },
+          // Plan phase gets tool metadata for strategic planning
+          plan: {
+            steps: config.plan?.steps,
+            availableTools: availableTools
+          },
           // Act phase gets all the tools
           act: {
             steps: config.act?.steps,
@@ -137,7 +143,7 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
             mergedTools: mergedTools
           }
         });
-        logger.info('PlanActAgent created successfully', { modelId: agent.modelId });
+        logger.info('PlanActAgent created successfully', { modelId: agent.modelId, availableTools: availableTools.length });
 
         const messages = input.messages as Array<ModelMessage>;
 
@@ -293,11 +299,17 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
             builtinTools: mergedTools.builtinToolNames.length,
           });
 
+          // Extract available tool metadata for planning phase
+          const availableTools = Array.from(mergedTools.metadata.values());
+
           const agent = new PlanActAgent({
             model,
             instructions: config.instructions,
-            // Plan phase gets empty tools to avoid structured output conflict
-            plan: { steps: config.plan?.steps },
+            // Plan phase gets tool metadata for strategic planning
+            plan: {
+              steps: config.plan?.steps,
+              availableTools: availableTools
+            },
             // Act phase gets all the tools
             act: {
               steps: config.act?.steps,
@@ -305,7 +317,7 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
               mergedTools: mergedTools
             }
           });
-          logger.info('Stream: PlanActAgent created', { modelId: agent.modelId, elapsed: Date.now() - startTime });
+          logger.info('Stream: PlanActAgent created', { modelId: agent.modelId, availableTools: availableTools.length, elapsed: Date.now() - startTime });
 
           const messages = input.messages as Array<ModelMessage>;
 

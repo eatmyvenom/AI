@@ -23,3 +23,6 @@ export * from './merger';
 
 // Tool results
 export * from './results';
+
+// Re-export commonly used types for convenience
+export type { ToolMetadata } from './types';
