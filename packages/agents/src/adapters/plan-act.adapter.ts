@@ -45,8 +45,7 @@ function formatReasoningDetails(
       signature: null,
       // Raw model outputs - no processing!
       action: action.action,
-      observation: action.observation,
-      ...(action.addPlanStepsReason ? { addPlanStepsReason: action.addPlanStepsReason } : {})
+      observation: action.observation
     });
   });
 
@@ -76,9 +75,6 @@ function formatThinkingBlock(
             `${index + 1}. Action: ${action.action}`,
             `   Observation: ${action.observation}`
           ];
-          if (action.addPlanStepsReason) {
-            segments.push(`   Plan Adjustment: ${action.addPlanStepsReason}`);
-          }
           return segments.join('\n');
         })
       : ['(no actions recorded)'];
@@ -449,11 +445,7 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
 
           // Stream actions as reasoning content
           for (const action of actions) {
-            let reasoning = `Action: ${action.action}\nObservation: ${action.observation}\n`;
-            if (action.addPlanStepsReason) {
-              reasoning += `Plan Adjustment: ${action.addPlanStepsReason}\n`;
-            }
-            reasoning += '\n';
+            const reasoning = `Action: ${action.action}\nObservation: ${action.observation}\n\n`;
             yield reasoning;
             logger.debug('ReasoningStream: Yielded action', { action: action.action });
           }

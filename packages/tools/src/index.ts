@@ -137,12 +137,52 @@ export const generateUUID = tool({
 });
 
 /**
+ * Schema for a single plan step
+ * Matches the structure used in the plan-act agent
+ */
+const PlanStepSchema = z.object({
+  title: z.string().describe('Brief title for this step'),
+  instructions: z.string().describe('Detailed instructions for executing this step'),
+  relevantContext: z.string().describe('Context or background information relevant to this step'),
+  toolStrategy: z.object({
+    toolName: z.string().optional().describe('Name of the tool to use for this step (if any)'),
+    reason: z.string().optional().describe('Why this tool is better than internal knowledge'),
+    fallbackToInternal: z.boolean().optional().describe('If the tool fails, should we fall back to internal knowledge?')
+  }).optional().describe('Strategy for using tools in this step')
+});
+
+/**
+ * Add Plan Steps tool - allows dynamic addition of plan steps during action phase
+ *
+ * This tool should ONLY be used when unexpected complexity is discovered during execution
+ * that was not anticipated in the original planning phase.
+ */
+export const addPlanSteps = tool({
+  description: 'Add new steps to the execution plan when unexpected complexity is discovered. Only use this when you encounter situations not anticipated in the original plan (e.g., missing prerequisites, authentication requirements, or unexpected data structures requiring additional processing).',
+  inputSchema: z.object({
+    steps: z.array(PlanStepSchema).describe('Array of new plan steps to add to the execution queue'),
+    reason: z.string().describe('Explanation of why these new steps are necessary and what unexpected situation prompted their addition')
+  }),
+  execute: async ({ steps, reason }) => {
+    // This tool's execution is primarily for signaling to the agent framework
+    // The actual plan modification happens in the agent's action phase loop
+    return Promise.resolve({
+      added: steps.length,
+      reason,
+      steps: steps.map(s => s.title),
+      message: `Successfully queued ${steps.length} new plan step(s) for execution`
+    });
+  },
+});
+
+/**
  * Default toolset containing all built-in tools
  */
 export const defaultToolset: ToolSet = {
   calculator,
   getCurrentTime,
   generateUUID,
+  addPlanSteps,
 };
 
 export type DefaultToolset = typeof defaultToolset;

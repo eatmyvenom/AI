@@ -21,21 +21,14 @@ export const PlanSchema = z.object({
     }))
 });
 
+// TODO: This
+// eslint-disable-next-line @typescript-eslint/no-unused-vars, unused-imports/no-unused-vars
 const PlanStepsSchema = PlanSchema.shape.steps;
 type PlanStep = z.infer<typeof PlanStepsSchema>[number];
-
-type PartialActStep = {
-    action?: string;
-    observation?: string;
-    addPlanSteps?: (Partial<PlanStep> | undefined)[] | undefined;
-    addPlanStepsReason?: string;
-};
 
 export const actStepSchema = z.object({
     action: z.string(),
     observation: z.string(),
-    addPlanSteps: PlanStepsSchema.optional(),
-    addPlanStepsReason: z.string().optional().describe("Required if addPlanSteps is provided. Explain why these new steps are necessary.")
 });
 
 export interface PlanActAgentConfig {
@@ -133,7 +126,7 @@ OUTPUT: Array of steps with title, instructions, relevantContext, and optional t
 
     static ACT_PHASE_INSTRUCTIONS = `You are in the ACTION phase of a Plan-and-Act agent.
 
-TASK: Execute the current plan step by taking ONE action and recording what you observe.
+TASK: Execute the current plan step by using the available tools and describing what you observe.
 
 CRITICAL TOOL STRATEGY GUIDANCE:
 The planning phase determined the optimal tool usage strategy. You MUST follow it:
@@ -150,46 +143,29 @@ The planning phase determined the optimal tool usage strategy. You MUST follow i
 - The tool is clearly mismatched to the query (e.g., calculator for web search)
 
 OUTPUT FORMAT:
-{
-  "action": "What you did (e.g., 'Calculated 2+2 using calculator', 'Called tavily web search with query X')",
-  "observation": "What you learned or produced (e.g., 'Result is 4', 'Found 3 relevant documents')",
-  "addPlanSteps": [] or undefined (READ BELOW - usually leave empty!),
-  "addPlanStepsReason": "Required if adding steps - explain why"
-}
+Your response should describe what you observed from executing the step. Use available tools as needed, and the system will track which tools you called automatically.
 
-TOOL EXECUTION EXAMPLES:
-Following tool strategy (DEFAULT - preferred when specified):
-{
-  "action": "Used tavily to search for 'current Tesla stock price'",
-  "observation": "TSLA is trading at $242.18 as of market close today, up 2.3% from yesterday",
-  "addPlanSteps": undefined
-}
+Example responses:
+- "The calculation shows that 2 + 2 = 4"
+- "The search found that TSLA is trading at $242.18 as of market close today, up 2.3% from yesterday"
+- "The current time is 3:45 PM EST on January 15, 2025"
 
-Internal knowledge fallback (when tool fails and fallbackToInternal=true):
-{
-  "action": "Tavily search failed, used internal knowledge about capital cities",
-  "observation": "The capital of France is Paris",
-  "addPlanSteps": undefined
-}
+ADDING NEW PLAN STEPS:
+If you discover unexpected complexity during execution, use the 'addPlanSteps' tool to add new steps to the plan.
 
-CRITICAL: When to use addPlanSteps
-
-DEFAULT BEHAVIOR: Leave addPlanSteps EMPTY (undefined or [])
-This field is for UNEXPECTED situations only.
-
-✅ ADD STEPS ONLY IF:
+✅ USE addPlanSteps TOOL ONLY IF:
 1. You discovered unexpected complexity (not anticipated in planning)
-   Example: "Tool returned 50 results when we expected 5, need separate analysis step"
+   Example: Tool returned 50 results when we expected 5, need separate analysis step
 
 2. You hit a blocker not foreseen in planning
-   Example: "API requires authentication token, need step to obtain token first"
+   Example: API requires authentication token, need step to obtain token first
 
 3. You found a missing prerequisite
-   Example: "User asked to deploy but no build exists, need build step"
+   Example: User asked to deploy but no build exists, need build step
 
-❌ DO NOT ADD STEPS IF:
-- You successfully completed the current step → just record observation
-- The observation contains enough info to continue → leave empty
+❌ DO NOT USE addPlanSteps IF:
+- You successfully completed the current step → just describe the observation
+- The observation contains enough info to continue → no tool call needed
 - You're following a pattern → each step is independent
 - The planned tool strategy worked as expected → no need to modify plan
 
@@ -333,7 +309,7 @@ The context from planning and actions is provided below. Use it to inform your r
     }
 
     runSingleAction(
-        agent: Agent<ToolSet, z.infer<typeof actStepSchema>, PartialActStep>,
+        agent: Agent<ToolSet>,
         input: ModelMessage[], planStep: z.infer<typeof PlanSchema>['steps'][number],
         previousActions?: z.infer<typeof actStepSchema>[]
     ) {
@@ -377,8 +353,9 @@ The context from planning and actions is provided below. Use it to inform your r
                 let lastAction: z.infer<typeof actStepSchema> | undefined;
                 let streamError: ClientExecutionRequiredError | Error | undefined;
 
-                // Since we removed structured output, we need to extract action-observation from text
-                const textCollector = (async () => {
+                // Collect the full text as observation and extract tool calls from steps
+                const collector = (async () => {
+                    // Collect text
                     let fullText = '';
                     for await (const chunk of actionStream.textStream) {
                         if (typeof chunk === 'string' && chunk.length > 0) {
@@ -386,29 +363,71 @@ The context from planning and actions is provided below. Use it to inform your r
                         }
                     }
 
-                    // Parse the response to extract action and observation
-                    if (fullText) {
-                        // Simple pattern matching - look for action/observation patterns
-                        const actionMatch = fullText.match(/action[:\s]*([^.]*?)(?:\n|$)/im) ||
-                                        fullText.match(/i["']?([^"']*)["']?[^:]*action/im) ||
-                                        fullText.match(/^([^.]*?)(?=\n|m\.)/);
+                    // Get steps from the action stream result to extract tool calls
+                    const steps = await actionStream.steps;
 
-                        const obsMatch = fullText.match(/observation[:\s]*([^.]*?)(?:\n|$)/im) ||
-                                     fullText.match(/observation[:\s]*([^.]*?)(?:\n|$)/im) ||
-                                     fullText.match(/result[:\s]*([^.]*?)(?:\n|$)/im);
+                    // Use the full text as the observation
+                    const observation = fullText.trim() || 'Step completed';
 
-                        const action = actionMatch?.[1]?.trim() || 'Action taken by agent';
-                        const observation = obsMatch?.[1]?.trim() || fullText.trim();
+                    // Derive action from tool calls in steps
+                    let action = 'Executed plan step';
+                    const toolCallsFromSteps: string[] = [];
 
-                        lastAction = {
-                            action,
-                            observation,
-                        };
+                    // Extract tool calls from the steps
+                    for (const step of steps) {
+                        if (step.toolCalls && Array.isArray(step.toolCalls)) {
+                            for (const toolCall of step.toolCalls) {
+                                if (toolCall.toolName) {
+                                    toolCallsFromSteps.push(toolCall.toolName);
+                                }
+                            }
+                        }
+                    }
 
-                        logger.debug('Parsed action from text response', {
-                            action,
-                            observation: observation.substring(0, 100) + (observation.length > 100 ? '...' : '')
-                        });
+                    // Build action description from tool calls
+                    if (toolCallsFromSteps.length > 0) {
+                        if (toolCallsFromSteps.length === 1) {
+                            action = `Called ${toolCallsFromSteps[0]} tool`;
+                        } else {
+                            action = `Called tools: ${toolCallsFromSteps.join(', ')}`;
+                        }
+                    } else if (fullText.length > 0) {
+                        // No tools called, agent used internal knowledge
+                        action = 'Used internal knowledge';
+                    }
+
+                    lastAction = {
+                        action,
+                        observation,
+                    };
+
+                    logger.debug('Created action from step', {
+                        action,
+                        toolCalls: toolCallsFromSteps,
+                        observation: observation.substring(0, 100) + (observation.length > 100 ? '...' : '')
+                    });
+
+                    // Check if addPlanSteps tool was called
+                    // We need to check tool calls (inputs) to get the arguments
+                    for (const step of steps) {
+                        if (step.toolCalls && Array.isArray(step.toolCalls)) {
+                            for (const toolCall of step.toolCalls) {
+                                if (toolCall.toolName === 'addPlanSteps') {
+                                    // Access args dynamically - it's in the toolCall but may not be in types
+                                    const toolCallAny = toolCall as unknown as { args?: { steps?: PlanStep[]; reason?: string } };
+                                    const newSteps = toolCallAny.args?.steps;
+                                    const reason = toolCallAny.args?.reason;
+
+                                    if (Array.isArray(newSteps)) {
+                                        logger.info('Adding new plan steps from tool call', {
+                                            count: newSteps.length,
+                                            reason: reason ?? 'No reason provided'
+                                        });
+                                        planQueue.push(...newSteps);
+                                    }
+                                }
+                            }
+                        }
                     }
                 })();
 
@@ -428,7 +447,7 @@ The context from planning and actions is provided below. Use it to inform your r
                         streamError = error instanceof Error ? error : new Error(String(error));
                     }
                 } finally {
-                    await textCollector;
+                    await collector;
                 }
 
                 // If client tool execution was required, create an action that reflects this
@@ -443,13 +462,6 @@ The context from planning and actions is provided below. Use it to inform your r
                     logger.warn('Stream error occurred but action collection may have succeeded', {
                         error: streamError instanceof Error ? streamError.message : String(streamError)
                     });
-                } else if (!lastAction) {
-                    // If we couldn't parse action from text, create a generic one
-                    lastAction = {
-                        action: 'Processed plan step',
-                        observation: 'Action completed (details not explicitly parsed from text response)'
-                    };
-                    logger.warn('Could not parse structured action from text response, using generic action');
                 }
 
                 if (lastAction) {
