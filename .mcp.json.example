@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "codex-planner": {
+      "command": "codex",
+      "args": [
+        "mcp-server",
+        "-c",
+        "sandbox_mode=read-only",
+        "-c",
+        "approval_policy=on-request"
+      ],
+      "env": {
+        "OPENAI_API_KEY": "your-openai-api-key-here"
+      }
+    },
+    "codex-actor": {
+      "command": "codex",
+      "args": [
+        "mcp-server",
+        "-c",
+        "sandbox_mode=workspace-write",
+        "-c",
+        "approval_policy=on-failure"
+      ],
+      "env": {
+        "OPENAI_API_KEY": "your-openai-api-key-here"
+      }
+    }
+  }
+}

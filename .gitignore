@@ -26,6 +26,10 @@ config.ts
 !config.example.js
 !config.example.json
 
+# MCP configuration (contains API keys)
+.mcp.json
+!.mcp.json.example
+
 # misc
 .DS_Store
 .idea/
