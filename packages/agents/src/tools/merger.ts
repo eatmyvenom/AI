@@ -1,17 +1,14 @@
 /**
- * Tool merger - combines client-provided and built-in tools
+ * Tool merger - prepares server-side (MCP) tools
  *
- * Handles merging client tools with server-side built-in tools, respecting
- * tool_choice preferences and handling name conflicts.
+ * Handles merging built-in tools while respecting tool_choice preferences.
  */
-
 
 import { createLogger } from '@packages/logger';
 import { getActiveTools } from '@packages/tools';
 import type { ToolSet } from 'ai';
 
-import { convertOpenAITools } from './converter';
-import type { OpenAITool, OpenAIToolChoice, ConvertedTool, ToolMetadata } from './types';
+import type { OpenAIToolChoice, ToolMetadata } from './types';
 import { ToolExecutionMode } from './types';
 
 const logger = createLogger('agents:tool-merger');
@@ -24,8 +21,6 @@ export interface MergedTools {
   toolSet: ToolSet;
   /** Metadata for each tool */
   metadata: Map<string, ToolMetadata>;
-  /** List of client tool names */
-  clientToolNames: string[];
   /** List of built-in tool names */
   builtinToolNames: string[];
 }
@@ -34,8 +29,6 @@ export interface MergedTools {
  * Options for merging tools
  */
 export interface MergeToolsOptions {
-  /** Client-provided tools (OpenAI format) */
-  clientTools?: OpenAITool[];
   /** Built-in tool names to enable (empty = all disabled, undefined = all enabled) */
   enabledBuiltinTools?: string[];
   /** Tool choice preference */
@@ -45,22 +38,19 @@ export interface MergeToolsOptions {
 }
 
 /**
- * Merge client-provided tools with built-in server-side tools
+ * Merge server-side built-in tools
  *
  * Priority:
- * 1. Client-provided tools take precedence over built-in tools with the same name
- * 2. tool_choice filters available tools
- * 3. Built-in tools are filtered by enabledBuiltinTools list
+ * 1. tool_choice filters available tools
+ * 2. Built-in tools are filtered by enabledBuiltinTools list
  */
 export function mergeTools(options: MergeToolsOptions): MergedTools {
   const {
-    clientTools = [],
     enabledBuiltinTools,
     toolChoice,
   } = options;
 
   logger.debug('Merging tools', {
-    clientToolCount: clientTools.length,
     enabledBuiltinTools,
     toolChoice,
   });
@@ -68,16 +58,8 @@ export function mergeTools(options: MergeToolsOptions): MergedTools {
   const result: MergedTools = {
     toolSet: {},
     metadata: new Map(),
-    clientToolNames: [],
     builtinToolNames: [],
   };
-
-  // Convert client tools
-  let convertedClientTools: ConvertedTool[] = [];
-  if (clientTools.length > 0) {
-    convertedClientTools = convertOpenAITools(clientTools);
-    logger.info('Converted client tools', { count: convertedClientTools.length });
-  }
 
   // Get built-in tools (pass enabledBuiltinTools to filter)
   const builtinTools = getActiveTools(enabledBuiltinTools);
@@ -106,28 +88,8 @@ export function mergeTools(options: MergeToolsOptions): MergedTools {
     return true;
   };
 
-  // Add client tools (they take precedence)
-  for (const converted of convertedClientTools) {
-    if (!shouldIncludeTool(converted.name)) {
-      logger.debug('Skipping client tool due to tool_choice', { toolName: converted.name });
-      continue;
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    result.toolSet[converted.name] = converted.tool;
-    result.metadata.set(converted.name, converted.metadata);
-    result.clientToolNames.push(converted.name);
-
-    logger.debug('Added client tool', { toolName: converted.name });
-  }
-
-  // Add built-in tools (skip if client tool with same name exists)
+  // Add built-in tools (respect tool_choice filters)
   for (const [toolName, tool] of Object.entries(builtinTools)) {
-    if (result.toolSet[toolName]) {
-      logger.warn('Skipping built-in tool - name conflict with client tool', { toolName });
-      continue;
-    }
-
     if (!shouldIncludeTool(toolName)) {
       logger.debug('Skipping built-in tool due to tool_choice', { toolName });
       continue;
@@ -146,7 +108,6 @@ export function mergeTools(options: MergeToolsOptions): MergedTools {
   const totalTools = Object.keys(result.toolSet).length;
   logger.info('Tool merge complete', {
     totalTools,
-    clientTools: result.clientToolNames.length,
     builtinTools: result.builtinToolNames.length,
   });
 
@@ -163,22 +124,8 @@ export function mergeTools(options: MergeToolsOptions): MergedTools {
 }
 
 /**
- * Check if any client tools are present in the merged result
- */
-export function hasClientTools(merged: MergedTools): boolean {
-  return merged.clientToolNames.length > 0;
-}
-
-/**
  * Get metadata for a specific tool
  */
 export function getToolMetadata(merged: MergedTools, toolName: string): ToolMetadata | undefined {
   return merged.metadata.get(toolName);
-}
-
-/**
- * Check if a tool requires client-side execution
- */
-export function isClientTool(merged: MergedTools, toolName: string): boolean {
-  return merged.clientToolNames.includes(toolName);
 }

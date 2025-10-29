@@ -4,7 +4,6 @@ import { z } from 'zod';
 
 import { resolveLanguageModel } from '../models';
 import type { MergedTools, ToolMetadata } from '../tools';
-import { ClientExecutionRequiredError } from '../tools/converter';
 
 const logger = createLogger('agents:plan-act');
 
@@ -351,7 +350,7 @@ The context from planning and actions is provided below. Use it to inform your r
                 const actionStream = this.runSingleAction(actAgent, input, currentStep, previousActions);
 
                 let lastAction: z.infer<typeof actStepSchema> | undefined;
-                let streamError: ClientExecutionRequiredError | Error | undefined;
+                let streamError: Error | undefined;
 
                 // Collect the full text as observation and extract tool calls from steps
                 const collector = (async () => {
@@ -437,30 +436,18 @@ The context from planning and actions is provided below. Use it to inform your r
                     }
                 } catch (error) {
                     // Capture error for processing after stream collection completes
-                    if (error instanceof ClientExecutionRequiredError) {
-                        streamError = error;
-                        logger.info('Client tool execution required', {
-                            toolName: error.toolName,
-                            toolCallId: error.toolCallId
-                        });
-                    } else {
-                        streamError = error instanceof Error ? error : new Error(String(error));
-                    }
+                    streamError = error instanceof Error ? error : new Error(String(error));
+                    logger.warn('Act phase stream encountered an error', {
+                        error: streamError.message,
+                    });
                 } finally {
                     await collector;
                 }
 
-                // If client tool execution was required, create an action that reflects this
-                if (streamError instanceof ClientExecutionRequiredError) {
-                    lastAction = {
-                        action: `Attempted to call client tool: ${streamError.toolName} (${streamError.toolCallId})`,
-                        observation: `Client tool requires execution on client side. Tool: ${streamError.toolName}. This tool call needs to be sent to the client for execution.`,
-                    };
-                    logger.info('Created client tool placeholder action', { toolName: streamError.toolName });
-                } else if (streamError && !lastAction) {
-                    // For other errors, if we don't have an action yet, log but continue
-                    logger.warn('Stream error occurred but action collection may have succeeded', {
-                        error: streamError instanceof Error ? streamError.message : String(streamError)
+                if (streamError && !lastAction) {
+                    // For errors where action collection failed, log but continue
+                    logger.warn('Stream error occurred and no action was collected', {
+                        error: streamError.message,
                     });
                 }
 
@@ -592,14 +579,6 @@ The context from planning and actions is provided below. Use it to inform your r
         }
 
         const allTools: ToolMetadata[] = [];
-
-        // Add client tools
-        for (const clientToolName of mergedTools.clientToolNames) {
-            const metadata = mergedTools.metadata.get(clientToolName);
-            if (metadata) {
-                allTools.push(metadata);
-            }
-        }
 
         // Add built-in tools (including MCP tools)
         for (const builtinToolName of mergedTools.builtinToolNames) {

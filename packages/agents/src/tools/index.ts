@@ -5,7 +5,7 @@
  * - Type definitions for OpenAI tool format
  * - JSON Schema to Zod conversion
  * - Tool conversion (OpenAI → AI SDK format)
- * - Tool merging (client + built-in tools)
+ * - Tool merging (built-in and MCP tools)
  * - Tool result processing
  */
 

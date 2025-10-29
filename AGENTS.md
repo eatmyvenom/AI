@@ -5,7 +5,7 @@ This repository hosts a Turbo + pnpm monorepo for building AI agents on top of N
 ## Key Packages
 
 - **`packages/agents`** — Defines agent composition, validation schemas, and provider plumbing. Entry point is `packages/agents/src/agent.ts` where `createChatAgent` validates OpenAI-compatible payloads, streams text with `streamText`, and maps usage details. Provider configuration lives in `packages/agents/src/provider.ts`.
-- **`packages/tools`** — Placeholder tool registry returning an `ai` SDK `ToolSet`. Extend `defaultToolset` in `packages/tools/src/index.ts` with real tool implementations (zod schemas + execute handlers).
+- **`packages/tools`** — Server-managed tool registry returning an `ai` SDK `ToolSet`. Extend `defaultToolset` in `packages/tools/src/index.ts` with server-executed tools or MCP connectors (zod schemas + execute handlers).
 - **`packages/logger`** — Shared logger with colorized output and NestJS adapter (`createLogger`, `NestLogger`). Used by the API bootstrap.
 
 ## API Application
@@ -50,6 +50,36 @@ Set these in the project root `.env`:
 
 It returns objects with `id`, `created`, `model`, `text`, `finishReason`, optional `usage`, and `steps` mirroring `streamText` output. The agent also exposes a `.stream(input)` method that returns the raw `streamText` result for SSE.
 
+## Tool Execution
+
+All tool invocations happen on the server or through configured MCP servers so API clients never supply executable code. The built-in toolset lives in `packages/tools/src/index.ts` (`calculator`, `getCurrentTime`, `generateUUID`, `addPlanSteps`) and can be filtered per request with `enabled_builtin_tools`.
+
+```json
+{
+  "agent": "plan-act",
+  "messages": [
+    { "role": "user", "content": "Remind me what time it is in UTC?" }
+  ],
+  "enabled_builtin_tools": ["getCurrentTime"]
+}
+```
+
+MCP tools are loaded via the same module. Initialize them during startup and hand the combined server/MCP toolset to `createChatAgent` when you need custom wiring.
+
+```ts
+import { createChatAgent } from '@packages/agents';
+import { getActiveToolsAsync, initializeMCPToolsInBackground } from '@packages/tools';
+
+initializeMCPToolsInBackground();
+
+async function buildAgent() {
+  const tools = await getActiveToolsAsync(['calculator', 'addPlanSteps']);
+  return createChatAgent({ tools });
+}
+```
+
+The Plan‑Act adapter merges these server-defined tools automatically so the model only sees vetted server or MCP capabilities.
+
 ## Extending Agents
 
 1. **Add tools** in `packages/tools/src/index.ts` using `tool({...})` helpers from `ai`. Export them via `defaultToolset`.
@@ -67,185 +97,98 @@ User notes:
 
 # Claude Code Workflow Instructions
 
-This section provides persistent instructions for Claude Code AI assistant sessions, establishing a plan-then-act workflow using Codex CLI integration via MCP.
+This section provides persistent instructions for Claude Code AI assistant sessions, establishing a plan-then-act workflow using **OpenAI Codex CLI** run directly in the terminal for maximum visibility and control.
 
-## ⚠️ CRITICAL: Codex Delegation Protocol
+## Using Codex as a Sub-Agent
 
-**When the user requests to "use Codex" or mentions Codex, Claude Code acts as an orchestrator/intermediary:**
+OpenAI Codex CLI (`codex`) is a powerful tool powered by GPT-5-Codex that excels at deep reasoning and complex planning. Claude Code uses it as a sub-agent for planning complex tasks.
 
-### Primary Actor: Codex
-- **Default behavior**: Delegate to Codex first for all work
-- Codex handles: analysis → planning → implementation
-- Codex has full codebase context and executes changes
-- Codex is the primary actor that does the heavy lifting
+### When to Use Codex
 
-### Intermediary Role: Claude Code
-Claude Code orchestrates the workflow and provides support:
+Use `codex exec` when:
+- User explicitly asks to "use codex" as a tool
+- Multi-file refactoring or architectural changes needed
+- Complex feature planning with many edge cases
+- Deep codebase analysis required
+- Migration or upgrade planning needed
 
-**Primary Responsibilities:**
-- Delegate tasks to `@codex-planner` (Plan Mode) or `@codex-actor` (Normal Mode)
-- Monitor Codex's progress and relay results to the user
-- Ensure the task is completed successfully
+### How to Use Codex Exec
 
-**Support Responsibilities (when Codex needs help):**
-- **If Codex struggles**: Gather additional information by reading files or analyzing code
-- **If Codex needs clarification**: Ask the user for more details
-- **If Codex fails to make a change**: Step in and make the change yourself
-- **If Codex's output is incomplete**: Fill in the gaps or complete remaining work
+```bash
+# For planning (read-only, high reasoning)
+codex exec --profile analyze --sandbox read-only "Create detailed plan to [task]"
 
-**Key Principle**: Try Codex first, but don't let the task fail. Claude Code ensures the job gets done right, even if that means stepping in to help.
-
-### Mode-Based Tool Selection
-
-**IMPORTANT: Always use the correct tool based on the current mode:**
-
-| Mode | Tool to Use | Sandbox | Purpose |
-|------|-------------|---------|---------|
-| **Plan Mode** | `@codex-planner` | read-only | Analysis, planning, architecture review |
-| **Act Mode / Normal** | `@codex-actor` | workspace-write | Implementation, refactoring, file modifications |
-
-**Rules:**
-- In Plan Mode (Shift+Tab) → ALWAYS use `@codex-planner`
-- In Act/Normal Mode → ALWAYS use `@codex-actor`
-- NEVER use `@codex-actor` in Plan Mode
-- NEVER use `@codex-planner` outside Plan Mode
-
-### Example Workflow
-
-**User says:** "Use Codex to remove all client tools from the plan-act agent"
-
-**Correct approach:**
-```
-1. ✅ Delegate to Codex first:
-   @codex-planner Remove all client tools from the plan-act agent.
-   Analyze the current implementation and create a detailed plan.
-
-2. Monitor Codex's response:
-   - If Codex succeeds: Show plan to user, proceed with @codex-actor after approval
-   - If Codex asks for more info: Read relevant files or ask user for clarification
-   - If Codex's plan is incomplete: Fill in missing details myself
-   - If Codex fails: Step in and complete the task myself
-
-3. Ensure task completion:
-   If @codex-actor makes changes but misses something, make the fix myself.
+# For simpler analysis
+codex exec --sandbox read-only "Analyze [specific aspect]"
 ```
 
-**Wrong approach:**
+**Key Options:**
+- `--profile analyze`: Uses high reasoning effort, ideal for planning
+- `--sandbox read-only`: Safe for planning, can't modify files
+- `--sandbox workspace-write`: Can modify files (use with caution)
+
+**Output:**
+- Final plan/analysis is in stdout
+- Reasoning process is in stderr (for debugging)
+- Exit code 0 = success
+
+### Workflow
+
+**For Planning:**
+1. **Detect Complex Task**: User asks for Codex or task is multi-file/complex
+2. **Run Codex Analysis**: Execute `codex exec --profile analyze --sandbox read-only` with comprehensive prompt
+3. **Parse Output**: Extract plan from stdout
+4. **Present Summary**: Show user the key points from Codex's plan
+5. **Get Approval**: Wait for user confirmation before implementing
+
+**For Implementation:**
+1. **Identify Natural Task Groups**: Look for logical groupings (e.g., code changes vs docs, or related file clusters)
+2. **Launch Parallel Codex Tasks**: Run multiple `codex exec --sandbox workspace-write` instances simultaneously
+3. **Monitor Progress**: Track completion of parallel tasks
+4. **Verify**: Run lint/build/tests after all tasks complete
+
+### Example - Comprehensive Single Task
+
+```bash
+# Codex is highly intelligent - give it the full scope
+codex exec --sandbox workspace-write "Remove all client tool support from the codebase:
+- Delete CLIENT execution mode, ClientExecutionRequiredError, and all client tool functions
+- Update plan-act agent, adapter, converter, merger, and tool index files
+- Update AGENTS.md and TOOL_CALLING.md documentation
+- Keep all server/MCP tool functionality intact
+- Ensure code compiles and follows existing patterns"
 ```
-❌ Skip Codex entirely and do everything yourself
-❌ Let Codex fail without helping
-❌ Leave the task incomplete if Codex struggles
+
+### Example - Parallel Execution for Speed
+
+```bash
+# Launch multiple independent tasks in parallel (in a single message)
+# Task 1: Core code changes
+codex exec --sandbox workspace-write "Remove client tools from packages/agents/src/tools/: converter.ts, merger.ts, types.ts - remove CLIENT mode, error classes, and client tool functions"
+
+# Task 2: Agent updates
+codex exec --sandbox workspace-write "Update plan-act agent and adapter to remove all client tool handling - simplify error handling and remove clientTools parameters"
+
+# Task 3: Documentation
+codex exec --sandbox workspace-write "Update AGENTS.md and TOOL_CALLING.md to describe server/MCP-only workflow, remove all client tool references"
 ```
 
-### Delegation Pattern
+### Best Practices
 
-```
-User Request
-    ↓
-Claude Code (orchestrator/intermediary)
-    ↓
-@codex-planner or @codex-actor (primary actor) ←─┐
-    ↓                                              │
-    ├─ Success? → Results → User                  │
-    ├─ Needs info? → Claude Code gathers info ────┘
-    ├─ Incomplete? → Claude Code fills gaps
-    └─ Failed? → Claude Code steps in and completes
-```
+**Task Scoping:**
+- ⚡ **Trust Codex's Intelligence**: Don't over-subdivide - Codex can handle comprehensive, multi-file tasks
+- 🚀 **Maximize Parallelism**: For speed, run 2-4 independent Codex tasks simultaneously
+- 🎯 **Group Logically**: Split by natural boundaries (code vs docs, frontend vs backend) not by individual files
+- 📋 **Be Specific**: Provide clear requirements and constraints in each prompt
 
-**Division of Labor:**
-- **Codex**: Primary actor - does the heavy lifting first
-- **Claude Code**: Orchestrator/intermediary - delegates, monitors, assists, ensures completion
+**Execution:**
+- Use `--sandbox read-only` for analysis/planning only
+- Use `--profile analyze` for complex reasoning tasks
+- Use `--sandbox workspace-write` for implementation
+- Launch parallel tasks in a single message for true concurrency
+- Verify all changes with lint/build after Codex completes
 
-## Planning Workflow
-
-For any complex feature, refactoring, or architectural change, follow this two-phase workflow:
-
-### Phase 1: Planning (Read-Only Analysis)
-
-**When to use:**
-- Multi-file refactoring or restructuring
-- New feature development affecting multiple components
-- Architecture decisions requiring analysis
-- Complex bug fixes spanning multiple files
-- Performance optimization planning
-
-**Process:**
-1. **Enter Plan Mode** (Shift+Tab in Claude Code)
-2. **Use `@codex-planner`** MCP tool to analyze the codebase and create a detailed implementation plan
-3. **Request a plan that includes:**
-   - All files that need to be created or modified
-   - Step-by-step implementation sequence
-   - Edge cases and error handling considerations
-   - Testing strategy and test cases
-   - Potential risks and rollback strategy
-   - Estimated complexity and time
-4. **Present the plan** to the user and wait for explicit approval
-5. **Do NOT proceed** to implementation until approval is received
-
-### Phase 2: Acting (Execution)
-
-**After approval:**
-1. **Use `@codex-actor`** MCP tool for implementation
-2. **Follow the approved plan** systematically
-3. **Execute changes** file by file in the planned order
-4. **Run tests** after each significant change
-5. **Document** any deviations from the plan with reasoning
-6. **Report progress** as you complete each planned step
-
-### When to Skip Planning
-
-For simple, low-risk tasks, proceed directly without the planning phase:
-- Fixing typos or formatting issues
-- Single-line bug fixes with obvious solutions
-- Adding comments or documentation
-- Updating dependencies (when straightforward)
-- Simple configuration changes
-
-**Rule of thumb:** If the change affects 3+ files or involves non-trivial logic, use the planning phase.
-
-## Codex MCP Integration
-
-This project uses two separate Codex MCP servers with different permissions:
-
-### codex-planner (Analysis Mode)
-- **Sandbox:** `read-only` - Cannot modify files
-- **Approval policy:** `on-request` - Suggests actions for approval
-- **Use for:** Code analysis, planning, architecture review, documentation reading
-- **Model:** Uses OpenAI GPT models optimized for code (e.g., GPT-5-Codex)
-
-### codex-actor (Execution Mode)
-- **Sandbox:** `workspace-write` - Can modify files in the workspace
-- **Approval policy:** `on-failure` - Auto-approves successful operations, pauses on errors
-- **Use for:** Implementation, refactoring, bug fixes, file creation/modification
-- **Model:** Uses OpenAI GPT models optimized for code
-
-## Best Practices
-
-### Planning Phase
-- Be thorough: Better to over-plan than under-plan
-- Consider alternatives: Present multiple approaches when applicable
-- Think about testing: Include test strategy in the plan
-- Document assumptions: Make implicit requirements explicit
-- Estimate complexity: Help user understand scope
-
-### Acting Phase
-- Follow the plan: Stick to the approved approach unless you discover issues
-- Report deviations: If you need to deviate, explain why
-- Test incrementally: Don't wait until the end to test
-- Keep context: Reference plan sections when implementing
-- Ask for clarification: If plan is unclear, ask before proceeding
-
-## Slash Commands
-
-- **`/plan-with-codex <task description>`** - Automatically triggers planning phase with Codex
-- See `.claude/commands/` for all available commands
-
-## MCP Configuration
-
-The MCP configuration is stored in `.mcp.json` (gitignored). To set up:
-
-1. Copy `.mcp.json.example` to `.mcp.json`
-2. Replace `your-openai-api-key-here` with your actual OpenAI API key
-3. Or set `OPENAI_API_KEY` environment variable
-
-See `PROJECT_CODEX_SETUP.md` for detailed setup instructions.
+**Anti-patterns:**
+- ❌ Don't create one Codex task per file - that's too granular
+- ❌ Don't run tasks sequentially when they could run in parallel
+- ❌ Don't micromanage Codex with overly detailed line-by-line instructions

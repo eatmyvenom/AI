@@ -56,10 +56,8 @@ export type OpenAIToolChoice =
  * Tool execution mode
  */
 export enum ToolExecutionMode {
-  /** Tool executes on server (built-in tools) */
+  /** Tool executes on server (built-in and MCP tools) */
   SERVER = 'server',
-  /** Tool execution requires client to execute and send results back */
-  CLIENT = 'client',
 }
 
 /**

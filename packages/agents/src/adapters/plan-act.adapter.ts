@@ -7,7 +7,7 @@ import type { z } from 'zod';
 import type { ChatAgent, ChatCompletionInput, AgentRunResult, ReasoningDetail } from '../agent';
 import { PlanActAgent, PlanSchema, actStepSchema } from '../agents';
 import { mergeTools, extractToolCallsFromSteps } from '../tools';
-import type { OpenAITool, OpenAIToolChoice } from '../tools/types';
+import type { OpenAIToolChoice } from '../tools/types';
 
 const logger = createLogger('agents:plan-act-adapter');
 
@@ -107,9 +107,8 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
       try {
         logger.debug('Creating PlanActAgent instance', { model, hasInstructions: Boolean(config.instructions) });
 
-        // Merge client-provided tools with built-in tools
+        // Merge request tool settings with built-in tools
         const mergedTools = mergeTools({
-          clientTools: (input.tools as OpenAITool[] | undefined) ?? [],
           enabledBuiltinTools: input.enabled_builtin_tools,
           toolChoice: input.tool_choice as OpenAIToolChoice | undefined,
           parallelToolCalls: input.parallel_tool_calls,
@@ -117,7 +116,6 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
 
         logger.info('Tools merged for plan-act agent', {
           totalTools: Object.keys(mergedTools.toolSet).length,
-          clientTools: mergedTools.clientToolNames.length,
           builtinTools: mergedTools.builtinToolNames.length,
         });
 
@@ -281,9 +279,8 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
         try {
           logger.info('Stream: Creating PlanActAgent instance', { model, hasInstructions: Boolean(config.instructions) });
 
-          // Merge client-provided tools with built-in tools
+          // Merge request tool settings with built-in tools
           const mergedTools = mergeTools({
-            clientTools: (input.tools as OpenAITool[] | undefined) ?? [],
             enabledBuiltinTools: input.enabled_builtin_tools,
             toolChoice: input.tool_choice as OpenAIToolChoice | undefined,
             parallelToolCalls: input.parallel_tool_calls,
@@ -291,7 +288,6 @@ export function createPlanActChatAdapter(config: PlanActAdapterConfig = {}): Cha
 
           logger.info('Stream: Tools merged for plan-act agent', {
             totalTools: Object.keys(mergedTools.toolSet).length,
-            clientTools: mergedTools.clientToolNames.length,
             builtinTools: mergedTools.builtinToolNames.length,
           });
 
